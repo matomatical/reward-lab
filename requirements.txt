@@ -1,0 +1,7 @@
+numpy
+einops
+jax
+jaxtyping
+optax
+pillow
+tqdm
