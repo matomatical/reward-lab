@@ -5,6 +5,7 @@ from IPython.display import display
 import numpy as np
 import einops
 from PIL import Image
+import jax
 
 import environment
 
