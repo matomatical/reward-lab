@@ -2,6 +2,10 @@ import io
 import ipywidgets as widgets
 from IPython.display import display
 
+import numpy as np
+import einops
+from PIL import Image
+
 import environment
 
 
