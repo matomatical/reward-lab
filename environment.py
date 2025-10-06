@@ -20,8 +20,8 @@ import sprites
 
 class Item(enum.IntEnum):
     EMPTY = 0
-    TRASH = 1
-    VASE = 2
+    SHARDS = 1
+    URN = 2
 
 
 @strux.struct
@@ -106,8 +106,8 @@ class Environment:
         # collide with items
         on_item = state.items_map[robot_pos]
         new_item = jnp.where(
-            (on_item == Item.VASE),
-            Item.TRASH,
+            (on_item == Item.URN),
+            Item.SHARDS,
             on_item,
         )
         state = state.replace(
@@ -175,12 +175,12 @@ class Environment:
             state.goal_pos[1],
             1,
         ].set(True)
-        grid = grid.at[:, :, 2].set(state.items_map == Item.TRASH)
-        grid = grid.at[:, :, 2].set(state.items_map == Item.VASE)
+        grid = grid.at[:, :, 2].set(state.items_map == Item.SHARDS)
+        grid = grid.at[:, :, 2].set(state.items_map == Item.URN)
         # feature data (inventory status)
         vec = jnp.zeros((2,), dtype=bool)
-        vec = vec.at[0].set(state.inventory == Item.TRASH)
-        vec = vec.at[1].set(state.inventory == Item.VASE)
+        vec = vec.at[0].set(state.inventory == Item.SHARDS)
+        vec = vec.at[1].set(state.inventory == Item.URN)
         # done
         return Observation(grid=grid, vec=vec)
 
@@ -192,8 +192,8 @@ class Environment:
         # choose avatar
         robot_sprite = jnp.stack((
             sprites.ROBOT,
-            sprites.ROBOT_TRASH,
-            sprites.ROBOT_VASE,
+            sprites.ROBOT_SHARDS,
+            sprites.ROBOT_URN,
         ))[state.inventory]
         
         # select sprites for other tiles
@@ -204,19 +204,19 @@ class Environment:
         tall_sprites = tall_sprites.at[0, :].set(sprites.FLOOR)
         tall_sprites = tall_sprites.at[1:, :, 8:].set(sprites.FLOOR[8:])
         tall_sprites = jnp.where(
-            (state.items_map == Item.TRASH)[:,:,None,None],
+            (state.items_map == Item.SHARDS)[:,:,None,None],
             jnp.where(
-                sprites.TRASH > 0,
-                sprites.TRASH,
+                sprites.SHARDS > 0,
+                sprites.SHARDS,
                 tall_sprites,
             ),
             tall_sprites,
         )
         tall_sprites = jnp.where(
-            (state.items_map == Item.VASE)[:,:,None,None],
+            (state.items_map == Item.URN)[:,:,None,None],
             jnp.where(
-                sprites.VASE > 0,
-                sprites.VASE,
+                sprites.URN > 0,
+                sprites.URN,
                 tall_sprites,
             ),
             tall_sprites,
@@ -299,11 +299,11 @@ def generate(
     items_map = items_map.at[
         items_pos[0, :num_trash],
         items_pos[1, :num_trash],
-    ].set(Item.TRASH)
+    ].set(Item.SHARDS)
     items_map = items_map.at[
         items_pos[0, num_trash:],
         items_pos[1, num_trash:],
-    ].set(Item.VASE)
+    ].set(Item.URN)
     
     return Environment(
         init_robot_pos=robot_pos,
@@ -374,89 +374,6 @@ def collect_rollout(
         final_obs=final_obs,
         final_value_pred=final_value_pred,
     )
-
-
-# # # 
-# Rewards
-
-
-type RewardFunction = Callable[[State, Action, State], float]
-
-
-def reward_simple(
-    state: State,
-    action: Action,
-    next_state: State,
-) -> float:
-    pickup_reward = (
-        (state.items_map[state.robot_pos[0], state.robot_pos[1]] == Item.TRASH)
-        & (state.inventory == Item.EMPTY)
-        & (action == Action.PICKUP)
-    )
-    putdown_reward = (
-        (state.goal_pos[0] == state.robot_pos[0])
-        & (state.goal_pos[1] == state.robot_pos[1])
-        & (state.inventory == Item.TRASH)
-        & (action == Action.PUTDOWN)
-    )
-    return (pickup_reward + putdown_reward).astype(float)
-
-
-def reward_potential(
-    state: State,
-    action: Action,
-    next_state: State,
-    discount_factor: float,
-) -> float:
-    putdown_reward = (
-        (state.goal_pos[0] == state.robot_pos[0])
-        & (state.goal_pos[1] == state.robot_pos[1])
-        & (state.inventory == Item.TRASH)
-        & (action == Action.PUTDOWN)
-    )
-    potential0 = (state.inventory == Item.TRASH)
-    potential1 = (next_state.inventory == Item.TRASH)
-    shape_term = discount_factor * potential1 - potential0
-    return putdown_reward + shape_term
-
-
-def reward_no_crash_vase(
-    state: State,
-    action: Action,
-    next_state: State,
-) -> float:
-    # TODO: Quiz: Are there any situations where it will still be optimal to
-    # crash a vase?
-    r = (next_state.robot_pos[0], next_state.robot_pos[1])
-    crashed_vase = (
-        (state.items_map[r] == Item.VASE)
-        & (next_state.items_map[r] == Item.TRASH)
-    )
-    return -crashed_vase
-
-
-def combined_reward(
-    state: State,
-    action: Action,
-    next_state: State,
-    discount_factor: float,
-) -> float:
-    rp = reward_potential(
-        state,
-        action,
-        next_state,
-        discount_factor=discount_factor,
-    )
-    rv = reward_no_crash_vase(
-        state,
-        action,
-        next_state,
-    )
-    return rp + rv
-
-
-# TODO: Yeah I think this is a good exercise. Just have to get over the "if"
-# JAX hurdle and finish building out the implementation.
 
 
 # # # 

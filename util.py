@@ -9,21 +9,35 @@ from PIL import Image
 import environment
 
 
+def display_rollouts(
+    envs: Environment["n"],
+    rollouts: Rollout["n"],
+    grid_width: int,
+    upscale: int = 3,
+):
+    frames = environment.animate_rollouts(
+        env=jax.tree.map(lambda x: x[0], envs),
+        rollouts=rollouts,
+        grid_width=grid_width,
+    )
+    frames = einops.repeat(
+        frames,
+        't h w rgb -> t (h h2) (w w2) rgb',
+        h2=upscale,
+        w2=upscale,
+    )
+    display_gif(frames)
+
+
 def display_gif(frames):
   frames = np.array(frames)
-  frames = einops.repeat(
-    frames,
-    't h w rgb -> t (h h2) (w w2) rgb',
-    h2=2,
-    w2=2,
-  )
   with io.BytesIO() as buffer:
     Image.fromarray(frames[0]).save(
         buffer,
         format="gif",
         save_all=True,
         append_images=[Image.fromarray(f) for f in frames[1:]],
-        duration=5,
+        duration=100,
         loop=0,
     )
     animation_widget = widgets.Image(
