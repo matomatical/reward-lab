@@ -1,11 +1,15 @@
 import io
-import ipywidgets as widgets
-from IPython.display import display
+import math
 
 import numpy as np
 import einops
 from PIL import Image
 import jax
+
+import ipywidgets as widgets
+from IPython.display import display
+import plotly.subplots
+import plotly.graph_objects
 
 import environment
 
@@ -104,3 +108,55 @@ class InteractivePlayer:
     def _ipython_display_(self):
         display(self.ui)
 
+
+class LiveSubplots:
+    def __init__(
+        self,
+        metric_names: list,
+        total_steps: int,
+        num_cols: int = 3,
+    ):
+        # Create plot
+        num_rows = math.ceil(len(metric_names) / num_cols)
+        fig = plotly.subplots.make_subplots(
+            rows=num_rows,
+            cols=num_cols,
+            subplot_titles=metric_names,
+            vertical_spacing=0.06,
+            horizontal_spacing=0.03,
+        )
+        fig.update_layout(
+            height=350 * num_rows,
+            showlegend=False,
+            margin=dict(t=20, b=20, l=10, r=10),
+        )
+        fig.update_xaxes(range=[0, total_steps])
+        for i, metric in enumerate(metric_names):
+            fig.add_trace(
+                plotly.graph_objects.Scatter(
+                    name=metric,
+                    x=[],
+                    y=[],
+                    line=dict(width=1, color='#636EFA'),
+                  ),
+                row=1 + (i // num_cols),
+                col=1 + (i % num_cols),
+            )
+        self.fig = plotly.graph_objects.FigureWidget(fig)
+        
+        # State tracking
+        self.data = {name: (i, [], []) for i, name in enumerate(metric_names)}
+
+        # Display the widget
+        display(self.fig)
+
+    def log(self, t: int, logs: dict):
+        for name, value in logs.items():
+            self.data[name][1].append(t)
+            self.data[name][2].append(value)
+
+    def refresh(self):
+        with self.fig.batch_update():
+            for name, (i, xs, ys) in self.data.items():
+                self.fig.data[i].x = xs
+                self.fig.data[i].y = ys
