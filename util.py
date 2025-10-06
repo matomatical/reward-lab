@@ -10,8 +10,8 @@ import environment
 
 
 def display_rollouts(
-    envs: Environment["n"],
-    rollouts: Rollout["n"],
+    envs: environment.Environment["n"],
+    rollouts: environment.Rollout["n"],
     grid_width: int,
     upscale: int = 3,
 ):
