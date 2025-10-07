@@ -14,6 +14,25 @@ import plotly.graph_objects
 import environment
 
 
+def display_rollout(
+    env: environment.Environment,
+    rollout: environment.Rollout,
+    upscale: int = 6,
+):
+    frames = environment.animate_rollouts(
+        env=env,
+        rollouts=jax.tree.map(lambda x: x[None], rollout), # + batch dimension
+        grid_width=1,
+    )
+    frames = einops.repeat(
+        frames,
+        't h w rgb -> t (h h2) (w w2) rgb',
+        h2=upscale,
+        w2=upscale,
+    )
+    display_gif(frames)
+
+
 def display_rollouts(
     envs: environment.Environment["n"],
     rollouts: environment.Rollout["n"],

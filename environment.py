@@ -30,7 +30,7 @@ class State:
     State of a grid world.
     """
     robot_pos: UInt8[Array, "2"]
-    goal_pos: UInt8[Array, "2"]
+    bin_pos: UInt8[Array, "2"]
     items_map: UInt8[Array, "world_size world_size"] # Item[world_size,world_size]
     inventory: UInt8[Array, ""]
 
@@ -58,7 +58,7 @@ class Environment:
     """
     init_robot_pos: UInt8[Array, "2"]
     init_items_map: UInt8[Array, "world_size world_size"]
-    goal_pos: UInt8[Array, "2"]
+    bin_pos: UInt8[Array, "2"]
     
     
     @property
@@ -76,7 +76,7 @@ class Environment:
             robot_pos=self.init_robot_pos,
             items_map=self.init_items_map,
             inventory=jnp.array(Item.EMPTY, dtype=jnp.uint8),
-            goal_pos=self.goal_pos,
+            bin_pos=self.bin_pos,
         )
 
     
@@ -153,8 +153,8 @@ class Environment:
         # dispose of items placed in bin
         state = state.replace(
             items_map=state.items_map.at[
-                state.goal_pos[0],
-                state.goal_pos[1],
+                state.bin_pos[0],
+                state.bin_pos[1],
             ].set(Item.EMPTY),
         )
 
@@ -171,8 +171,8 @@ class Environment:
             0,
         ].set(True)
         grid = grid.at[
-            state.goal_pos[0],
-            state.goal_pos[1],
+            state.bin_pos[0],
+            state.bin_pos[1],
             1,
         ].set(True)
         grid = grid.at[:, :, 2].set(state.items_map == Item.SHARDS)
@@ -222,12 +222,12 @@ class Environment:
             tall_sprites,
         )
         tall_sprites = tall_sprites.at[
-            state.goal_pos[0],
-            state.goal_pos[1],
+            state.bin_pos[0],
+            state.bin_pos[1],
         ].set(jnp.where(
-            (sprites.GOAL > 0),
-            sprites.GOAL,
-            tall_sprites[state.goal_pos[0], state.goal_pos[1]],
+            (sprites.BIN > 0),
+            sprites.BIN,
+            tall_sprites[state.bin_pos[0], state.bin_pos[1]],
         ))
         tall_sprites = tall_sprites.at[
             state.robot_pos[0],
@@ -272,7 +272,7 @@ def generate(
     Randomly construct an environment layout.
     """
     # fixed goal pos
-    goal_pos = jnp.zeros((2,), dtype=jnp.uint8)
+    bin_pos = jnp.zeros((2,), dtype=jnp.uint8)
 
     # list of possible item/robot coordinates
     coords = einops.rearrange(
@@ -308,7 +308,7 @@ def generate(
     return Environment(
         init_robot_pos=robot_pos,
         init_items_map=items_map,
-        goal_pos=goal_pos,
+        bin_pos=bin_pos,
     )
 
 
