@@ -364,27 +364,6 @@ def ppo_loss_fn(
 # Evaluating rollouts
 
 
-@jax.jit
-def compute_average_return(
-    rewards: Float[Array, "num_steps"],
-    discount_rate: float,
-) -> float:
-    # compute per-step returns
-    def _accumulate_return(
-        next_step_return,
-        this_step_reward,
-    ):
-        this_step_return = this_step_reward + discount_rate * next_step_return
-        return this_step_return, this_step_return
-    _, per_step_returns = jax.lax.scan(
-        _accumulate_return,
-        0,
-        rewards,
-        reverse=True,
-    )
-    # average returns at the start of each episode
-    average_return = jnp.mean(per_step_returns[0])
-    return average_return
 
 
 # # # 
