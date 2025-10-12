@@ -49,7 +49,7 @@ def evaluate_behaviour(
         net.policy,
         num_steps,
     )
-    rewards = jax.vmap(reward_fn)(
+    rewards = jax.vmap(jax.vmap(reward_fn))(
         rollouts.transitions.state,
         rollouts.transitions.action,
         rollouts.transitions.next_state,
