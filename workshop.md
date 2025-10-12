@@ -376,29 +376,8 @@ env = # ...
 InteractivePlayer(env)
 ```
 
-Task 1 solution
----------------
-
-Of course, many environment layouts are permissible. Here is the one depicted
-above:
-
-```python
-env = Environment(
-    init_robot_pos=jnp.array((1,2), dtype=jnp.uint8),
-    init_items_map=jnp.array((
-      (0,0,0,0,2,2),
-      (0,1,0,0,0,2),
-      (0,0,0,0,0,0),
-      (0,1,1,0,0,2),
-      (0,0,0,0,2,2),
-      (2,0,1,0,2,2),
-    ), dtype=jnp.uint8),
-    bin_pos=jnp.array((0,0), dtype=jnp.uint8),
-)
-```
-
-Bonus task: Framing questions
------------------------------
+Bonus task 1: Framing questions
+-------------------------------
 
 If you have time and interest, consider the following questions:
 
@@ -447,7 +426,8 @@ elements.
 Maximising expected return
 --------------------------
 
-Given a reward function and a **trajectory** of states and actions,
+Given a reward function and a **trajectory** (or **rollout**) of states and
+actions,
 $$
   s_0, a_0, s_1, a_1, \ldots
 $$
@@ -471,9 +451,9 @@ Reward functions play a central role in the discipline of reinforcement
 learning. Their centrality is driven by the following hypothesis, called the
 **reward hypothesis:**
 
-> That all of what we mean by goals and purposes can be well thought of as
+> "That all of what we mean by goals and purposes can be well thought of as
 > maximization of the expected value of the cumulative sum of a received scalar
-> signal (reward).
+> signal (reward)."
 > 
 > ---Richard Sutton, [The reward hypothesis](http://incompleteideas.net/rlai.cs.ualberta.ca/RLAI/rewardhypothesis.html)
 
@@ -540,21 +520,6 @@ Your task is to answer the following questions:
 3. What kinds of qualitative behaviours maximise return subject to this reward
    function? Are they the same as the previous answer?
 
-Task 2 solution
----------------
-
-Answers to questions:
-
-1. The reward function assigns reward 1 to transitions in which the robot picks
-   up a pile of shards, and transitions in which it drops a pile of shards
-   into the bin.
-
-2. The reward designer is probably trying to incentivise the agent to operate
-   the robot to pick up shards and put them into the bin, 'cleaning up' the
-   pottery shop.
-
-3. See below...
-
 Cleaning up shop
 ----------------
 
@@ -567,11 +532,10 @@ gradient descent. The following code defines a small CNN-based policy network.
 ```python
 key = jax.random.key(seed=42)
 key_init, key = jax.random.split(key)
-net = ActorCriticNetwork.init(
+net1 = ActorCriticNetwork.init(
     key=key_init,
     obs_height=env.world_size,
     obs_width=env.world_size,
-    obs_features=2,
     net_channels=16,
     net_width=32,
     num_conv_layers=2,
@@ -582,8 +546,8 @@ net = ActorCriticNetwork.init(
 
 The library `ppo.py` provides a function `ppo_train_step` that collects some
 rollouts and trains an agent network on these using a reinforcement learning
-algorithm (proximal policy optimisation). Here is a function that wraps this
-into a training loop:
+algorithm (a simplified form of proximal policy optimisation). Here is a
+function that wraps this into a training loop:
 
 ```python
 def train_agent(
@@ -719,11 +683,6 @@ Questions:
 2. Are there discrepancies between the behaviour you observe and the
    intended/expected behaviour? If so, list them.
 
-Task 3 solution
----------------
-
-See below...
-
 Part 3: Specification gaming
 ============================
 
@@ -791,48 +750,6 @@ def reward_drop(state: State, action: Action, next_state: State) -> float:
 ```python
 def reward_break(state: State, action: Action, next_state: State) -> float:
    # TODO
-```
-
-Task 4 solution
----------------
-
-There are a couple of ways to implement each of these, since the information
-is redundantly represented throughout the state, action, and next state.
-
-Here is a solution for the first function based on checking `state` and
-`action`, similar to `reward1`'s `pickup_reward`.
-
-```python
-def reward_drop(state: State, action: Action, next_state: State) -> float:
-    item_below_robot = state.items_map[
-        state.robot_pos[0],
-        state.robot_pos[1],
-    ]
-    return (
-        (state.robot_pos != state.bin_pos).any()
-        & (item_below_robot == Item.EMPTY)
-        & (state.inventory == Item.SHARDS)
-        & (action == Action.PUTDOWN)
-    ).astype(float)
-```
-
-Here is a solution for the second function that checks if shards under the
-robot's destination position were originally an urn.
-
-```python
-def reward_break(state: State, action: Action, next_state: State) -> float:
-    item_below_robot_after_transition = next_state.items_map[
-        next_state.robot_pos[0],
-        next_state.robot_pos[1],
-    ]
-    item_there_before_transition = state.items_map[
-        next_state.robot_pos[0],
-        next_state.robot_pos[1],
-    ]
-    return (
-        (item_below_robot_after_transition == Item.SHARDS)
-        & (item_there_before_transition == Item.URN)
-    ).astype(float)
 ```
 
 Quantifying reward hacking
@@ -917,8 +834,8 @@ called **potential shaping,** and it works as follows:
    leaves those states without achieving return) or actualised (if the policy
    leaves the states and gains actual reward).
 
-Bonus task: Cancelling potentials
----------------------------------
+Bonus task 2: Cancelling potentials
+-----------------------------------
 
 Those of you who are theoretically inclined may like to try this optional
 exercise.
@@ -942,69 +859,6 @@ Conclude that ordering on policies induced by the expected return under $r$ is
 the same as the ordering on policies induced by the expected return under
 $r'$.
 
-Bonus task solution
--------------------
-
-Let $R$ denote the return with respect to reward function $r$, and $R'$ the
-return with respect to reward function $r'$. Then:
-
-\begin{align*}
-  R'(s_0, a_0, \ldots)
-  &= \sum_{t=0}^\infty \gamma^t r'(s_t, a_t, s_{t+1})
-\\
-  &= \sum_{t=0}^\infty \gamma^t (
-      r(s_t, a_t, s_{t+1}) + \gamma\Phi(s_{t+1}) - \Phi(s_t)
-  )
-\\
-  &= \sum_{t=0}^\infty \gamma^t r(s_t, a_t, s_{t+1})
-  + \sum_{t=0}^\infty \gamma^{t+1} \Phi(s_{t+1})
-  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
-\\
-  &= R(s_0, a_0, \ldots)
-  + \sum_{t=1}^\infty \gamma^t \Phi(s_t)
-  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
-\\
-  &= R(s_0, a_0, \ldots) - \Phi(s_0).
-\end{align*}
-
-It follows that
-\begin{align*}
-  \mathbb{E}_{
-    s_0 \sim \iota,
-    a_t \sim \pi(s_t),
-    s_{t+1} \sim \tau(s_t, a_t)
-  } \left[
-    R'(s_0, a_0, \ldots)
-  \right]
-  &=
-  \mathbb{E}_{
-    s_0 \sim \iota,
-    a_t \sim \pi(s_t),
-    s_{t+1} \sim \tau(s_t, a_t)
-  } \left[
-    R(s_0, a_0, \ldots) - \Phi(s_0)
-  \right]
-\\
-  &=
-  \mathbb{E}_{
-    s_0 \sim \iota,
-    a_t \sim \pi(s_t),
-    s_{t+1} \sim \tau(s_t, a_t)
-  } \left[
-    R(s_0, a_0, \ldots)
-  \right]
-  -
-  \mathbb{E}_{
-    s_0 \sim \iota
-  } \left[
-    \Phi(s_0)
-  \right].
-\end{align*}
-
-That is, for all policies $\pi$, the expected return under $r$ and $r'$ differs
-by a fixed constant (independent of $\pi$).
-
-
 Task 5: Implementing potential shaping
 --------------------------------------
 
@@ -1017,37 +871,6 @@ inventory.
 def reward_shaped(state: State, action: Action, next_state: State) -> float:
     # TODO
 ```
-
-Task 5 solution
----------------
-
-The following reward function uses a potential function that is 1 when the
-robot is holding a shard and 0 otherwise.
-
-```python
-def inventory_potential(state: State) -> float:
-    return (state.inventory == Item.SHARDS).astype(float)
-
-def reward_shaped(state: State, action: Action, next_state: State) -> float:
-    pickup_shaping_term = (
-        DISCOUNT_RATE * inventory_potential(next_state)
-        - inventory_potential(state)
-    )
-    putdown_reward = (
-        (state.bin_pos[0] == state.robot_pos[0])
-        & (state.bin_pos[1] == state.robot_pos[1])
-        & (state.inventory == Item.SHARDS)
-        & (action == Action.PUTDOWN)
-    ).astype(float)
-    return putdown_reward + pickup_shaping_term
-```
-
-The effect of shaping is to transform a reward function that only gives reward
-when the robot drops a shard into the bin into a reward function that gets this
-reward in advance and then loses small amounts of reward while it is holding
-the shard until it drops it into the bin, so that after discounting, the total
-return after dropping the shard into the bin is equal. If the robot drops the
-shard on the floor, it loses the initial reward that was advanced.
 
 Disincentivising specific behaviours
 ------------------------------------
@@ -1072,8 +895,8 @@ created by breaking the urn (the gain in return will be slightly less than 1
 due to discounting). Penalising -2 means the agent is clearly better off not
 breaking the urn.
 
-Bonus task: Everyone has a price
---------------------------------
+Bonus task 3: Everyone has a price
+----------------------------------
 
 If you have time, consider the following two questions:
 
@@ -1096,17 +919,6 @@ def reward_no_break(state: State, action: Action, next_state: State) -> float:
     # TODO
 ```
 
-Task 6 solution
----------------
-
-We already implemented a reward function for breaking urns in task 4. Let's
-invert this into a reward function for avoiding breaking urns.
-
-```python
-def reward_no_break(state: State, action: Action, next_state: State) -> float:
-    return -2. * reward_break(state, action, next_state)
-```
-
 Task 7: Fixing the specification
 --------------------------------
 
@@ -1124,32 +936,6 @@ specification gaming:
 
 ```python
 ```
-
-Task 7 solution
----------------
-
-Defining `reward2`:
-
-```python
-def reward2(state: State, action: Action, next_state: State) -> float:
-    shaped = reward_shaped(state, action, next_state)
-    nobreak = reward_no_break(state, action, next_state)
-    return shaped + nobreak
-```
-
-Training a new agent:
-```python
-key_train, key = jax.random.split(key)
-net2 = train_agent(
-    key=key_train,
-    net=net,
-    env=env,
-    reward_fn=reward2,
-    num_train_steps=512,
-)
-```
-
-One can manually inspect its behaviour, or use the tools from task 4.
 
 Part 4: Generalisation
 ======================
@@ -1207,39 +993,6 @@ Let's see how your policy generalises:
 3. Inspect the behaviour of the agent and qualitatively describe it.
 
 ```python
-```
-
-Task 8 solution
----------------
-
-Many altered environment layouts are permissible, here is one in which the
-shards and urns have been interchanged.
-
-```python
-env2 = Environment(
-    init_robot_pos=jnp.array((3,4), dtype=jnp.uint8),
-    init_items_map=jnp.array((
-      (0,0,0,0,1,1),
-      (0,2,0,0,0,1),
-      (0,0,0,0,0,0),
-      (0,2,2,0,0,1),
-      (0,0,0,0,1,1),
-      (1,0,2,0,1,1),
-    ), dtype=jnp.uint8),
-    bin_pos=jnp.array((0,0), dtype=jnp.uint8),
-)
-```
-
-We can inspect the behaviour of `net2` on this environment as follows.
-```python
-key_rollout = jax.random.key(seed=1)
-rollout = collect_rollout(
-    env=env2,
-    key=key_rollout,
-    policy_fn=net2.policy,
-    num_steps=64,
-)
-display_rollout(rollout)
 ```
 
 Procedurally generated environments
@@ -1405,7 +1158,6 @@ net_big = ActorCriticNetwork.init(
     key=key_init,
     obs_height=world_size,
     obs_width=world_size,
-    obs_features=2,
     net_channels=16,
     net_width=128,
     num_conv_layers=4,
@@ -1445,11 +1197,6 @@ properties:
 
 4. Qualitatively characterise the kinds of environments where the agent
    generalises correctly and the ones where it does not.
-
-Task 9 solution
----------------
-
-See below...
 
 Part 5: Goal misgeneralisation
 ==============================
@@ -1517,65 +1264,6 @@ def proxy(state: State, action: Action, next_state: State) -> float:
 Note: We call the behavioural objective `proxy` because it's correlated with
 the training reward function on the training environment distribution.
 
-Task 10 solution
-----------------
-
-For sub-task 1, there are many possible environments. Here is one in which the
-bin is in the top right corner instead of the top left corner.
-
-```python
-env_shift = Environment(
-    init_robot_pos=jnp.array((2,2), dtype=jnp.uint8),
-    init_items_map=jnp.array((
-      (0,0,0,0),
-      (0,0,1,0),
-      (0,1,0,2),
-      (0,0,2,0),
-    ), dtype=jnp.uint8),
-    bin_pos=jnp.array((0,3), dtype=jnp.uint8),
-)
-```
-
-The behavioural objective is to drop shards in the top left corner.
-
-```
-def proxy(state: State, action: Action, next_state: State) -> float:
-    item_below_robot = state.items_map[
-        state.robot_pos[0],
-        state.robot_pos[1],
-    ]
-    return (
-        (state.robot_pos[0] == 0)
-        & (state.robot_pos[1] == 0)
-        & (item_below_robot == Item.EMPTY)
-        & (state.inventory == Item.SHARDS)
-        & (action == Action.PUTDOWN)
-    ).astype(float)
-```
-
-The evaluation code can be adapted from 'quantifying reward hacking' after task
-4.
-
-```python
-reward_fns = [reward2, proxy]
-return_vecs = [
-    evaluate_behaviour(
-        key=jax.random.key(seed=1),
-        env=env_shift,
-        net=net3,
-        reward_fn=r,
-    )
-    for r in reward_fns
-]
-
-fig, axes = plt.subplots(len(reward_fns), figsize=(5,3*len(reward_fns)))
-for (reward_fn, returns, ax) in zip(reward_fns, return_vecs, axes):
-    ax.hist(returns)
-    ax.set_title(reward_fn.__name__)
-    ax.set_xlabel("return")
-fig.show()
-```
-
 Task 11: Distribution shift
 ---------------------------
 
@@ -1621,56 +1309,6 @@ envs = jax.vmap(
 display_envs(envs, grid_width=8)
 ```
 
-Task 11 solution
-----------------
-
-An easy way to do this is to incorporate the bin placement into the same
-`jax.random.choice` call as the robot and the other items.
-
-```python
-def generate_shift(
-    key: PRNGKeyArray,
-    world_size: int,
-    num_shards: int,
-    num_urns: int,
-) -> Environment:
-    # list of possible item/robot coordinates
-    coords = einops.rearrange(
-        jnp.indices((world_size, world_size)),
-        'c h w -> c (h w)',
-    )
-
-    # sample bin, robot and item positions without replacement
-    num_positions = 1 + 1 + num_shards + num_urns
-    all_positions = jax.random.choice(
-        key=key,
-        a=coords,
-        shape=(num_positions,),
-        axis=1,
-        replace=False,
-    )
-    bin_pos = all_positions[:, 0]
-    robot_pos = all_positions[:, 1]
-    items_pos = all_positions[:, 2:]
-
-    # create item map
-    items_map = jnp.zeros((world_size, world_size), dtype=jnp.uint8)
-    items_map = items_map.at[
-        items_pos[0, :num_shards],
-        items_pos[1, :num_shards],
-    ].set(Item.SHARDS)
-    items_map = items_map.at[
-        items_pos[0, num_shards:],
-        items_pos[1, num_shards:],
-    ].set(Item.URN)
-    
-    return Environment(
-        init_robot_pos=robot_pos,
-        init_items_map=items_map,
-        bin_pos=bin_pos,
-    )
-```
-
 Training out of distribution
 ----------------------------
 
@@ -1689,7 +1327,6 @@ net_big = ActorCriticNetwork.init(
     key=key_init,
     obs_height=world_size,
     obs_width=world_size,
-    obs_features=2,
     net_channels=16,
     net_width=128,
     num_conv_layers=4,
@@ -1810,6 +1447,7 @@ Roughly speaking, you will need to do the following:
 Good luck!
 
 ```python
+# TODO
 ```
 
 Mitigating goal misgeneralisation in practice
@@ -1845,6 +1483,370 @@ reward function, and a policy's behaviour in reinforcement learning:
 
 Throughout the remainder of this module, you will see various reflections of
 this conceptual pattern playing out in different learning settings.
+
+Solutions
+=========
+
+Task 1 solution
+---------------
+
+Of course, many environment layouts are permissible. Here is the one depicted
+above:
+
+```python
+env = Environment(
+    init_robot_pos=jnp.array((1,2), dtype=jnp.uint8),
+    init_items_map=jnp.array((
+      (0,0,0,0,2,2),
+      (0,1,0,0,0,2),
+      (0,0,0,0,0,0),
+      (0,1,1,0,0,2),
+      (0,0,0,0,2,2),
+      (2,0,1,0,2,2),
+    ), dtype=jnp.uint8),
+    bin_pos=jnp.array((0,0), dtype=jnp.uint8),
+)
+```
+
+Task 2 solution
+---------------
+
+Answers to questions:
+
+1. The reward function assigns reward 1 to transitions in which the robot picks
+   up a pile of shards, and transitions in which it drops a pile of shards
+   into the bin.
+
+2. The reward designer is probably trying to incentivise the agent to operate
+   the robot to pick up shards and put them into the bin, 'cleaning up' the
+   pottery shop.
+
+3. See below...
+
+Task 3 solution
+---------------
+
+See below...
+
+Task 4 solution
+---------------
+
+There are a couple of ways to implement each of these, since the information
+is redundantly represented throughout the state, action, and next state.
+
+Here is a solution for the first function based on checking `state` and
+`action`, similar to `reward1`'s `pickup_reward`.
+
+```python
+def reward_drop(state: State, action: Action, next_state: State) -> float:
+    item_below_robot = state.items_map[
+        state.robot_pos[0],
+        state.robot_pos[1],
+    ]
+    return (
+        (state.robot_pos != state.bin_pos).any()
+        & (item_below_robot == Item.EMPTY)
+        & (state.inventory == Item.SHARDS)
+        & (action == Action.PUTDOWN)
+    ).astype(float)
+```
+
+Here is a solution for the second function that checks if shards under the
+robot's destination position were originally an urn.
+
+```python
+def reward_break(state: State, action: Action, next_state: State) -> float:
+    item_below_robot_after_transition = next_state.items_map[
+        next_state.robot_pos[0],
+        next_state.robot_pos[1],
+    ]
+    item_there_before_transition = state.items_map[
+        next_state.robot_pos[0],
+        next_state.robot_pos[1],
+    ]
+    return (
+        (item_below_robot_after_transition == Item.SHARDS)
+        & (item_there_before_transition == Item.URN)
+    ).astype(float)
+```
+
+Bonus task 2 solution
+---------------------
+
+Let $R$ denote the return with respect to reward function $r$, and $R'$ the
+return with respect to reward function $r'$. Then:
+
+\begin{align*}
+  R'(s_0, a_0, \ldots)
+  &= \sum_{t=0}^\infty \gamma^t r'(s_t, a_t, s_{t+1})
+\\
+  &= \sum_{t=0}^\infty \gamma^t (
+      r(s_t, a_t, s_{t+1}) + \gamma\Phi(s_{t+1}) - \Phi(s_t)
+  )
+\\
+  &= \sum_{t=0}^\infty \gamma^t r(s_t, a_t, s_{t+1})
+  + \sum_{t=0}^\infty \gamma^{t+1} \Phi(s_{t+1})
+  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
+\\
+  &= R(s_0, a_0, \ldots)
+  + \sum_{t=1}^\infty \gamma^t \Phi(s_t)
+  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
+\\
+  &= R(s_0, a_0, \ldots) - \Phi(s_0).
+\end{align*}
+
+It follows that
+\begin{align*}
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R'(s_0, a_0, \ldots)
+  \right]
+  &=
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R(s_0, a_0, \ldots) - \Phi(s_0)
+  \right]
+\\
+  &=
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R(s_0, a_0, \ldots)
+  \right]
+  -
+  \mathbb{E}_{
+    s_0 \sim \iota
+  } \left[
+    \Phi(s_0)
+  \right].
+\end{align*}
+
+That is, for all policies $\pi$, the expected return under $r$ and $r'$ differs
+by a fixed constant (independent of $\pi$).
+
+
+Task 5 solution
+---------------
+
+The following reward function uses a potential function that is 1 when the
+robot is holding a shard and 0 otherwise.
+
+```python
+def inventory_potential(state: State) -> float:
+    return (state.inventory == Item.SHARDS).astype(float)
+
+def reward_shaped(state: State, action: Action, next_state: State) -> float:
+    pickup_shaping_term = (
+        DISCOUNT_RATE * inventory_potential(next_state)
+        - inventory_potential(state)
+    )
+    putdown_reward = (
+        (state.bin_pos[0] == state.robot_pos[0])
+        & (state.bin_pos[1] == state.robot_pos[1])
+        & (state.inventory == Item.SHARDS)
+        & (action == Action.PUTDOWN)
+    ).astype(float)
+    return putdown_reward + pickup_shaping_term
+```
+
+The effect of shaping is to transform a reward function that only gives reward
+when the robot drops a shard into the bin into a reward function that gets this
+reward in advance and then loses small amounts of reward while it is holding
+the shard until it drops it into the bin, so that after discounting, the total
+return after dropping the shard into the bin is equal. If the robot drops the
+shard on the floor, it loses the initial reward that was advanced.
+
+Task 6 solution
+---------------
+
+We already implemented a reward function for breaking urns in task 4. Let's
+invert this into a reward function for avoiding breaking urns.
+
+```python
+def reward_no_break(state: State, action: Action, next_state: State) -> float:
+    return -2. * reward_break(state, action, next_state)
+```
+
+Task 7 solution
+---------------
+
+Defining `reward2`:
+
+```python
+def reward2(state: State, action: Action, next_state: State) -> float:
+    shaped = reward_shaped(state, action, next_state)
+    nobreak = reward_no_break(state, action, next_state)
+    return shaped + nobreak
+```
+
+Training a new agent:
+```python
+key_train, key = jax.random.split(key)
+net2 = train_agent(
+    key=key_train,
+    net=net,
+    env=env,
+    reward_fn=reward2,
+    num_train_steps=512,
+)
+```
+
+One can manually inspect its behaviour, or use the tools from task 4.
+
+Task 8 solution
+---------------
+
+Many altered environment layouts are permissible, here is one in which the
+shards and urns have been interchanged.
+
+```python
+env2 = Environment(
+    init_robot_pos=jnp.array((3,4), dtype=jnp.uint8),
+    init_items_map=jnp.array((
+      (0,0,0,0,1,1),
+      (0,2,0,0,0,1),
+      (0,0,0,0,0,0),
+      (0,2,2,0,0,1),
+      (0,0,0,0,1,1),
+      (1,0,2,0,1,1),
+    ), dtype=jnp.uint8),
+    bin_pos=jnp.array((0,0), dtype=jnp.uint8),
+)
+```
+
+We can inspect the behaviour of `net2` on this environment as follows.
+```python
+key_rollout = jax.random.key(seed=1)
+rollout = collect_rollout(
+    env=env2,
+    key=key_rollout,
+    policy_fn=net2.policy,
+    num_steps=64,
+)
+display_rollout(rollout)
+```
+
+Task 9 solution
+---------------
+
+See below...
+
+Task 10 solution
+----------------
+
+For sub-task 1, there are many possible environments. Here is one in which the
+bin is in the top right corner instead of the top left corner.
+
+```python
+env_shift = Environment(
+    init_robot_pos=jnp.array((2,2), dtype=jnp.uint8),
+    init_items_map=jnp.array((
+      (0,0,0,0),
+      (0,0,1,0),
+      (0,1,0,2),
+      (0,0,2,0),
+    ), dtype=jnp.uint8),
+    bin_pos=jnp.array((0,3), dtype=jnp.uint8),
+)
+```
+
+The behavioural objective is to drop shards in the top left corner.
+
+```
+def proxy(state: State, action: Action, next_state: State) -> float:
+    item_below_robot = state.items_map[
+        state.robot_pos[0],
+        state.robot_pos[1],
+    ]
+    return (
+        (state.robot_pos[0] == 0)
+        & (state.robot_pos[1] == 0)
+        & (item_below_robot == Item.EMPTY)
+        & (state.inventory == Item.SHARDS)
+        & (action == Action.PUTDOWN)
+    ).astype(float)
+```
+
+The evaluation code can be adapted from 'quantifying reward hacking' after task
+4.
+
+```python
+reward_fns = [reward2, proxy]
+return_vecs = [
+    evaluate_behaviour(
+        key=jax.random.key(seed=1),
+        env=env_shift,
+        net=net3,
+        reward_fn=r,
+    )
+    for r in reward_fns
+]
+
+fig, axes = plt.subplots(len(reward_fns), figsize=(5,3*len(reward_fns)))
+for (reward_fn, returns, ax) in zip(reward_fns, return_vecs, axes):
+    ax.hist(returns)
+    ax.set_title(reward_fn.__name__)
+    ax.set_xlabel("return")
+fig.show()
+```
+
+Task 11 solution
+----------------
+
+An easy way to do this is to incorporate the bin placement into the same
+`jax.random.choice` call as the robot and the other items.
+
+```python
+def generate_shift(
+    key: PRNGKeyArray,
+    world_size: int,
+    num_shards: int,
+    num_urns: int,
+) -> Environment:
+    # list of possible item/robot coordinates
+    coords = einops.rearrange(
+        jnp.indices((world_size, world_size)),
+        'c h w -> c (h w)',
+    )
+
+    # sample bin, robot and item positions without replacement
+    num_positions = 1 + 1 + num_shards + num_urns
+    all_positions = jax.random.choice(
+        key=key,
+        a=coords,
+        shape=(num_positions,),
+        axis=1,
+        replace=False,
+    )
+    bin_pos = all_positions[:, 0]
+    robot_pos = all_positions[:, 1]
+    items_pos = all_positions[:, 2:]
+
+    # create item map
+    items_map = jnp.zeros((world_size, world_size), dtype=jnp.uint8)
+    items_map = items_map.at[
+        items_pos[0, :num_shards],
+        items_pos[1, :num_shards],
+    ].set(Item.SHARDS)
+    items_map = items_map.at[
+        items_pos[0, num_shards:],
+        items_pos[1, num_shards:],
+    ].set(Item.URN)
+    
+    return Environment(
+        init_robot_pos=robot_pos,
+        init_items_map=items_map,
+        bin_pos=bin_pos,
+    )
+```
 
 Notes to self
 =============

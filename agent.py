@@ -113,7 +113,6 @@ class ActorCriticNetwork:
             "obs_height",
             "obs_width",
             "obs_channels",
-            "obs_features",
             "net_channels",
             "net_width",
             "num_conv_layers",
@@ -125,8 +124,6 @@ class ActorCriticNetwork:
         key: PRNGKeyArray,
         obs_height: int,
         obs_width: int,
-        obs_channels: int,
-        obs_features: int,
         net_channels: int,
         net_width: int,
         num_conv_layers: int,
@@ -137,7 +134,7 @@ class ActorCriticNetwork:
         # initialise convolutional layers
         conv0 = Convolution.init(
             key=k1,
-            channels_in=obs_channels,
+            channels_in=4,
             channels_out=net_channels,
             kernel_size=3,
             stride_size=1,
@@ -157,7 +154,7 @@ class ActorCriticNetwork:
         # initialise dense layers
         dense0 = AffineTransform.init(
             key=k3,
-            num_inputs=obs_height * obs_width * net_channels + obs_features,
+            num_inputs=obs_height * obs_width * net_channels + 2,
             num_outputs=net_width,
         )
         denses = jax.vmap(
@@ -196,7 +193,7 @@ class ActorCriticNetwork:
         Float[Array, "num_actions"],
         Float[Array, ""],
     ]:
-        # case
+        # cast
         obs_grid = obs_grid.astype(float)
         obs_vec = obs_vec.astype(float)
         # embed observation grid part with residual CNN
@@ -234,7 +231,7 @@ class ActorCriticNetwork:
         self: Self,
         obs: Observation,
     ) -> Float[Array, "num_actions"]:
-        pi, v = self.policy_value(obs)
+        pi, _v = self.policy_value(obs)
         return pi
 
 
@@ -246,8 +243,6 @@ if __name__ == "__main__":
         key=key,
         obs_height=8,
         obs_width=8,
-        obs_channels=4,
-        obs_features=2,
         net_channels=16,
         net_width=16,
         num_conv_layers=8,
