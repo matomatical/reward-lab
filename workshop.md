@@ -2,9 +2,6 @@
 title: Specification gaming and goal misgeneralisation in grid worlds
 author: Matthew Farrugia-Roberts
 date: Monday, October 13^th^
----
-
----
 colorlinks: true
 geometry: margin=1in
 header-includes:
@@ -34,20 +31,20 @@ Structure of today's lab:
 The supporting code for today's lab can be found at
   [github.com/matomatical/reward-lab](https://github.com/matomatical/reward-lab).
 
+Make sure to ask your TAs for help if you get stuck.
+
 Part 0: Installation
 ====================
 
-Colab runtime
--------------
+Choosing a runtime
+------------------
 
-For parts 1--3, the default CPU run-time is sufficient. When you reach parts 4
-and 5, it may make sense to switch over to a TPU (fastest) or GPU (fast)
-run-time and repeat the installation and imports, as training on procedurally
-generated grid-worlds requires deeper networks and longer training runs than
-individual grid-worlds.
+For parts 1--3, the default CPU runtime is sufficient. When you reach parts 4
+and 5, it makes sense to switch over to a GPU (fast) or TPU (fastest) and
+repeat the installation and imports.
 
-Configure runtime
------------------
+Configuring the runtime
+-----------------------
 
 Install custom code and dependencies.
 ```python
@@ -71,6 +68,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import einops
+import optax
 import tqdm.notebook
 import matplotlib.pyplot as plt
 from jaxtyping import Array, Float, Bool, PRNGKeyArray
@@ -80,11 +78,13 @@ Import classes and functions for this lab
 (see [github.com/matomatical/reward-lab](https://github.com/matomatical/reward-lab) for source).
 ```python
 import strux
-from util import display_rollout, display_rollouts, InteractivePlayer
-from environment import Item, State, Observation, Action, Environment
-from environment import collect_rollout, compute_average_return
+from util import display_rollout, display_rollouts, InteractivePlayer, LiveSubplots, display_envs
+from potteryshop import Item, State, Action, Environment, collect_rollout
+from evaluation import RewardFunction, compute_return, evaluate_behaviour
 from agent import ActorCriticNetwork
-from ppo import train_agent, train_agent_multienv
+
+# a constant
+DISCOUNT_RATE = 0.995
 ```
 
 Hello, JAX!
@@ -513,14 +513,14 @@ def reward1(state: State, action: Action, next_state: State) -> float:
         state.robot_pos[1],
     ]
     pickup_reward = (
-        (item_below_robot == Item.SHARD)
+        (item_below_robot == Item.SHARDS)
         & (state.inventory == Item.EMPTY)
         & (action == Action.PICKUP)
     ).astype(float)
     dispose_reward = (
         (state.bin_pos[0] == state.robot_pos[0])
         & (state.bin_pos[1] == state.robot_pos[1])
-        & (state.inventory == Item.SHARD)
+        & (state.inventory == Item.SHARDS)
         & (action == Action.PUTDOWN)
     ).astype(float)
     total_reward = pickup_reward + dispose_reward
@@ -558,8 +558,8 @@ Answers to questions:
 Cleaning up shop
 ----------------
 
-Next, let's apply apply a reinforcement learning algorithm to see what
-behaviours the agent learns given this reward function.
+Next, let's apply a reinforcement learning algorithm to see what behaviours the
+agent learns given this reward function.
 
 We'll need a neural network parametrisation of a policy we can train by
 gradient descent. The following code defines a small CNN-based policy network.
@@ -580,23 +580,66 @@ net = ActorCriticNetwork.init(
 )
 ```
 
-The library `ppo.py` provides a function `train_agent` that implements a
-reinforcement learning algorithm (proximal policy optimisation) to train a
-policy network given an environment and a reward function, plus various other
-hyper-parameters.
+The library `ppo.py` provides a function `ppo_train_step` that collects some
+rollouts and trains an agent network on these using a reinforcement learning
+algorithm (proximal policy optimisation). Here is a function that wraps this
+into a training loop:
+
+```python
+def train_agent(
+    key: PRNGKeyArray,
+    env: Environment,
+    net: ActorCriticNetwork,
+    reward_fn: RewardFunction,
+    num_train_steps: int = 512,
+    num_train_steps_per_vis: int = 8,
+) -> ActorCriticNetwork:
+    learning_rate = 0.001
+    max_grad_norm = 0.5
+    optimiser = optax.chain(
+        optax.clip_by_global_norm(max_grad_norm),
+        optax.adam(learning_rate=learning_rate),
+    )
+    optimiser_state = optimiser.init(net)
+
+    liveplot = LiveSubplots(['return'], num_train_steps)
+    for t in tqdm.notebook.trange(num_train_steps):
+        key_step, key = jax.random.split(key)
+        net, optimiser_state, metrics = ppo_train_step(
+            key=key_step,
+            net=net,
+            env=env,
+            reward_fn=reward_fn,
+            optimiser=optimiser,
+            optimiser_state=optimiser_state,
+            # ppo step hyperparameters
+            num_rollouts=32,
+            num_env_steps=64,
+            discount_rate=DISCOUNT_RATE,
+            eligibility_rate=0.95,
+            proximity_eps=0.1,
+            critic_coeff=0.5,
+            entropy_coeff=0.001,
+        )
+        liveplot.log(t, {'return': metrics['return']})
+        if (t+1) % num_train_steps_per_vis == 0:
+            liveplot.refresh()
+    
+    return net
+```
 
 Let's call that function on the initialised policy network, your
 manually-instantiated environment from task 1, and the above reward function,
 to train the policy for a small number of steps.
 
-```
+```python
 key_train, key = jax.random.split(key)
-net = train_agent(
-  net=net,
-  env=env,
-  reward=reward1,
-  key=key_train,
-  num_updates=512,
+net1 = train_agent(
+    key=key_train,
+    net=net1,
+    env=env,
+    reward_fn=reward1,
+    num_train_steps=512,
 )
 ```
 
@@ -660,7 +703,7 @@ key_rollout = jax.random.key(seed=1)
 rollout = collect_rollout(
     env=env,
     key=key_rollout,
-    actor_critic=net.forward,
+    policy_fn=net1.policy,
     num_steps=64,
 )
 display_rollout(rollout)
@@ -722,15 +765,15 @@ who introduced the problem of *inverse reinforcement learning* (that of
 taking a policy and extracting from it a reward function for which that policy
 maximises expected return).
 
-Task 4: Quantifying reward hacking
-----------------------------------
+Task 4: Reward functions as behavioural probes
+----------------------------------------------
 
 We won't trouble ourselves with inverse reinforcement learning algorithms
 today. Instead, let's just take a step in this direction by quantifying the
 misbehaviour of our agents using reward functions that incentivise each
 problematic behaviour. We won't use these reward functions for training, but we
 can use them to measure to what extent we are inadvertently training for these
-behaviours.
+behaviours---as 'behavioural probes'.
 
 Your next task is to write one reward function that measures the extent to
 which an agent is engaging in each problematic behaviour:
@@ -742,69 +785,13 @@ which an agent is engaging in each problematic behaviour:
 
 ```python
 def reward_drop(state: State, action: Action, next_state: State) -> float:
-   # ...
-   return 0.
+   # TODO
 ```
 
 ```python
 def reward_break(state: State, action: Action, next_state: State) -> float:
-   # ...
-   return 0.
+   # TODO
 ```
-
-Having written these reward functions, we can get a quantitative signal about
-whether our policy is engaging in these misbehaviours. We can collect a batch
-of trajectories and then score them according to each reward function and plot
-the result, using the following convenience function:
-
-```python
-def evaluate_behaviour(
-    env: Environment,
-    net: ActorCriticNetwork,
-    key: PRNGKeyArray,
-    reward_fns: list[RewardFunction],
-    num_steps: int = 64,
-    num_rollouts: int = 1000,
-    discount_rate: float = 0.995,
-) -> list[Float[Array, "num_rollouts"]]
-```
-
-Note that, unlike a reward function that correctly incentivises the *intended*
-behaviour, we ideally want these reward functions *to be minimised.* Moreover,
-note that to tell if a reward function is minimised or maximised, we need to
-consider the range of possible returns, which depends on the reward function
-(in these simple environments it can be derived analytically).
-
-```python
-rewards = [reward1, reward_drop, reward_break]
-return_vecs = evaluate_behaviour(
-    key=jax.random.key(seed=seed),
-    env=env,
-    net=net,
-    rewards=rewards,
-)
-```
-
-```python
-fig, axes = plt.subplots(n, figsize=(5,3*len(return_vecs)))
-for (reward, returns, ax) in zip(rewards, return_vecs, axes):
-    ax.hist(returns)
-    ax.set_title(reward.__name__)
-fig.show()
-```
-
-<!--
-> ### `jax.jit` and `jax.vmap`
->
-> This is our first use of just-in-time compilation and vectorised mapping with
-> JAX. It's not necessary to understand the details right now, but suffice it
-> to say these transformations are making the code shorter and making it run
-> faster. If you are interested, take a look at the JAX tutorials on these
-> topics:
-> 
-> * [Just in time compilation](https://docs.jax.dev/en/latest/jit-compilation.html).
-> * [Automatic vectorization](https://docs.jax.dev/en/latest/automatic-vectorization.html).
--->
 
 Task 4 solution
 ---------------
@@ -822,8 +809,9 @@ def reward_drop(state: State, action: Action, next_state: State) -> float:
         state.robot_pos[1],
     ]
     return (
-        (item_below_robot == Item.EMPTY)
-        & (state.inventory == Item.SHARD)
+        (state.robot_pos != state.bin_pos).any()
+        & (item_below_robot == Item.EMPTY)
+        & (state.inventory == Item.SHARDS)
         & (action == Action.PUTDOWN)
     ).astype(float)
 ```
@@ -842,10 +830,59 @@ def reward_break(state: State, action: Action, next_state: State) -> float:
         next_state.robot_pos[1],
     ]
     return (
-        (item_below_robot_after_transition == Item.SHARD)
+        (item_below_robot_after_transition == Item.SHARDS)
         & (item_there_before_transition == Item.URN)
     ).astype(float)
 ```
+
+Quantifying reward hacking
+--------------------------
+
+Having written these reward functions, we can get a quantitative signal about
+whether our policy is engaging in these misbehaviours. We can collect a batch
+of trajectories and then score them according to each reward function and plot
+the result, using the following convenience function:
+
+```python
+def evaluate_behaviour(
+    env: Environment,
+    net: ActorCriticNetwork,
+    key: PRNGKeyArray,
+    reward_fn: RewardFunction,
+    num_steps: int = 64,
+    num_rollouts: int = 1000,
+    discount_rate: float = 0.995,
+) -> Float[Array, "num_rollouts"]
+```
+
+Note that, unlike a reward function that correctly incentivises the *intended*
+behaviour, we ideally want these reward functions *to be minimised.* Moreover,
+note that to tell if a reward function is minimised or maximised, we need to
+consider the range of possible returns, which depends on the reward function
+(in these simple environments it can be derived analytically).
+
+```python
+reward_fns = [reward1, reward_drop, reward_break]
+return_vecs = [
+    evaluate_behaviour(
+        key=jax.random.key(seed=1),
+        env=env,
+        net=net1,
+        reward_fn=r,
+    )
+    for r in reward_fns
+]
+```
+
+```python
+fig, axes = plt.subplots(len(reward_fns), figsize=(5,3*len(reward_fns)))
+for (reward_fn, returns, ax) in zip(reward_fns, return_vecs, axes):
+    ax.hist(returns)
+    ax.set_title(reward_fn.__name__)
+    ax.set_xlabel("return")
+fig.show()
+```
+
 
 Potential shaping: Avoiding cycles
 ----------------------------------
@@ -868,8 +905,8 @@ Fortunately, there is a sure-fire scheme for adding a so-called **shaping**
 term to a reward function without introducing such loops. This is a method
 called **potential shaping,** and it works as follows:
 
-1. Formulate the information as a function of states, $\Phi : S -> \mathbb{R}$,
-   called a potential function.
+1. Formulate the information as a (bounded) function of states, $\Phi : S \to
+   \mathbb{R}$, called a potential function.
 2. When we transition from state $s$ to state $s'$, add reward $\gamma
    \Phi(s')$ to represent gaining the potential from being in state $s'$, but
    also *subtract* reward $\Phi(s)$ to represent *losing* the potential from
@@ -878,11 +915,7 @@ called **potential shaping,** and it works as follows:
    without giving it a long-term incentive to stay there for the sake of this
    potential---the potential should eventually either be lost (if the agent
    leaves those states without achieving return) or actualised (if the policy
-   leaves the states while achieving return).
-
-TODO: What, if any, assumptions should we have placed on the potential
-function? Check the paper. I think things should be bounded so that they
-converge.
+   leaves the states and gains actual reward).
 
 Bonus task: Cancelling potentials
 ---------------------------------
@@ -906,10 +939,71 @@ two reward functions $r$ and $r'$ and show that they differ by an additive
 constant that depends only on $s_0$.
 
 Conclude that ordering on policies induced by the expected return under $r$ is
-that same as the ordering on policies induced by the expected return under
+the same as the ordering on policies induced by the expected return under
 $r'$.
 
-TODO: Check that this is accurate.
+Bonus task solution
+-------------------
+
+Let $R$ denote the return with respect to reward function $r$, and $R'$ the
+return with respect to reward function $r'$. Then:
+
+\begin{align*}
+  R'(s_0, a_0, \ldots)
+  &= \sum_{t=0}^\infty \gamma^t r'(s_t, a_t, s_{t+1})
+\\
+  &= \sum_{t=0}^\infty \gamma^t (
+      r(s_t, a_t, s_{t+1}) + \gamma\Phi(s_{t+1}) - \Phi(s_t)
+  )
+\\
+  &= \sum_{t=0}^\infty \gamma^t r(s_t, a_t, s_{t+1})
+  + \sum_{t=0}^\infty \gamma^{t+1} \Phi(s_{t+1})
+  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
+\\
+  &= R(s_0, a_0, \ldots)
+  + \sum_{t=1}^\infty \gamma^t \Phi(s_t)
+  - \sum_{t=0}^\infty \gamma^t \Phi(s_t)
+\\
+  &= R(s_0, a_0, \ldots) - \Phi(s_0).
+\end{align*}
+
+It follows that
+\begin{align*}
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R'(s_0, a_0, \ldots)
+  \right]
+  &=
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R(s_0, a_0, \ldots) - \Phi(s_0)
+  \right]
+\\
+  &=
+  \mathbb{E}_{
+    s_0 \sim \iota,
+    a_t \sim \pi(s_t),
+    s_{t+1} \sim \tau(s_t, a_t)
+  } \left[
+    R(s_0, a_0, \ldots)
+  \right]
+  -
+  \mathbb{E}_{
+    s_0 \sim \iota
+  } \left[
+    \Phi(s_0)
+  \right].
+\end{align*}
+
+That is, for all policies $\pi$, the expected return under $r$ and $r'$ differs
+by a fixed constant (independent of $\pi$).
+
 
 Task 5: Implementing potential shaping
 --------------------------------------
@@ -920,26 +1014,98 @@ Hint: Consider a potential function that looks at the contents of the
 inventory.
 
 ```python
-def reward_shaped(...):
+def reward_shaped(state: State, action: Action, next_state: State) -> float:
     # TODO
 ```
 
-Task 6: Negative rewards
-------------------------
+Task 5 solution
+---------------
 
-TODO: Describe the approach of giving negative rewards to penalise hitting
-urns. Ask them to implement this. Basically they have already implemented this
-above, so they are just negating it. Make it a bit more nuanced by explaining
-how the agent can get most of that reward back by binning the shards some
-number of steps later, so we should probably make it -2.
+The following reward function uses a potential function that is 1 when the
+robot is holding a shard and 0 otherwise.
+
+```python
+def inventory_potential(state: State) -> float:
+    return (state.inventory == Item.SHARDS).astype(float)
+
+def reward_shaped(state: State, action: Action, next_state: State) -> float:
+    pickup_shaping_term = (
+        DISCOUNT_RATE * inventory_potential(next_state)
+        - inventory_potential(state)
+    )
+    putdown_reward = (
+        (state.bin_pos[0] == state.robot_pos[0])
+        & (state.bin_pos[1] == state.robot_pos[1])
+        & (state.inventory == Item.SHARDS)
+        & (action == Action.PUTDOWN)
+    ).astype(float)
+    return putdown_reward + pickup_shaping_term
+```
+
+The effect of shaping is to transform a reward function that only gives reward
+when the robot drops a shard into the bin into a reward function that gets this
+reward in advance and then loses small amounts of reward while it is holding
+the shard until it drops it into the bin, so that after discounting, the total
+return after dropping the shard into the bin is equal. If the robot drops the
+shard on the floor, it loses the initial reward that was advanced.
+
+Disincentivising specific behaviours
+------------------------------------
+
+Let's turn to the second problematic behaviour: breaking urns to find more
+shards. There are a couple of different approaches to disincentivising this
+behaviour. We'll use a simple approach of directly penalising transitions in
+which the robot breaks an urn.
+
+The main question is, how much of a negative reward should we assign for
+breaking an urn?
+
+* We need to set the negative reward large enough so that the agent is better
+  off *not* breaking the urn rather than breaking the urn and binning the
+  resulting shards.
+* We can't set the negative reward to be too large, or it will cause training
+  instability.
+
+You can try different values, but a good default value would be -2 reward for
+breaking an urn. The agent can recover 1 reward later if it bins the shards
+created by breaking the urn (the gain in return will be slightly less than 1
+due to discounting). Penalising -2 means the agent is clearly better off not
+breaking the urn.
+
+Bonus task: Everyone has a price
+--------------------------------
+
+If you have time, consider the following two questions:
+
+1. If the reward for breaking an urn is -2, there are still situations in which
+   breaking an urn can lead to higher return than not breaking an urn.
+   Can you find any such situations?
+
+2. Can you think of any approach to defining a reward function that would make
+   breaking urns always suboptimal?
+
+Task 6: Penalty
+---------------
+
+Your task is to implement a reward function that assigns a negative reward to
+transitions in which the robot breaks an urn. Hint: You already implemented a
+related function in task 4.
 
 ```
-TODO: Solution
+def reward_no_break(state: State, action: Action, next_state: State) -> float:
+    # TODO
 ```
 
-TODO: Make the second part of the task the following question. If the reward
-for breaking an urn is -2, is there ever any situation where breaking an urn
-leads to higher return than leaving it intact?
+Task 6 solution
+---------------
+
+We already implemented a reward function for breaking urns in task 4. Let's
+invert this into a reward function for avoiding breaking urns.
+
+```python
+def reward_no_break(state: State, action: Action, next_state: State) -> float:
+    return -2. * reward_break(state, action, next_state)
+```
 
 Task 7: Fixing the specification
 --------------------------------
@@ -956,51 +1122,149 @@ specification gaming:
 3. Inspect some rollouts, manually and/or by using your evaluation reward
    function probes, to confirm that the agent now behaves as intended.
 
+```python
 ```
-TODO
+
+Task 7 solution
+---------------
+
+Defining `reward2`:
+
+```python
+def reward2(state: State, action: Action, next_state: State) -> float:
+    shaped = reward_shaped(state, action, next_state)
+    nobreak = reward_no_break(state, action, next_state)
+    return shaped + nobreak
 ```
+
+Training a new agent:
+```python
+key_train, key = jax.random.split(key)
+net2 = train_agent(
+    key=key_train,
+    net=net,
+    env=env,
+    reward_fn=reward2,
+    num_train_steps=512,
+)
+```
+
+One can manually inspect its behaviour, or use the tools from task 4.
 
 Part 4: Generalisation
 ======================
 
-Introduce:
+So far, we have worked with a specific grid-world layout. In practice, we want
+our agents to be able navigate and complete tasks in the complex environments,
+up to and including the real world.
 
-* What it means for a policy to generalise.
+Real-world environments are almost infinitely complex---an agent will almost
+never see the same situation more than once. This means we could never hope to
+give our agents direct experience in every possible state they might encounter
+prior to deployment.
 
-Warmup:
+Instead, we need to train agents that will **generalise** from the situations
+they encountered during training to the new situations they will face after
+deployment.
 
-* Here is a procedural generator that generates pottery shop environments. We
-  want to train a policy in one of these and then have it generalise to more of
-  them.
-* This code calls a function that trains a policy given an environment
-  generator. Run it.
+In this part, we'll investigate a more complex version of our pottery shop
+environment where the same agent might face different shop layouts.
 
 Generalisation in RL
 --------------------
 
-TODO: Introduce what it means for policies to generalise.
+Generalisation is a foundational concept in machine learning. In reinforcement
+learning, generalisation is essentially no different:
+
+* We want a function. In this case, it's a function called a 'policy' and it
+  maps from states/observations to action probabilities.
+
+* We use deep learning to learn that function from data. The details here are a
+  little different in reinforcement learning than in supervised learning, but
+  at the end of the day, we are still using a gradient descent algorithm to
+  find weights that optimise some objective. In this case, the objective is
+  derived from maximising expected return.
+
+* We haven't explored all possible inputs to the function. There are some
+  states for which the policy's outputs have never been queried and subject to
+  calibration through the objective.
+
+Generalisation in reinforcement learning refers to how the policy responds to
+unseen states, particularly whether the action probabilities that it outputs
+for these states are consistent with the training objective of maximising
+expected return.
 
 Task 8: How does your policy generalise?
 ----------------------------------------
 
-TODO: Ask them to instantiate a new environment and test their policy in it,
-and qualitatively describe what it does.
+Let's see how your policy generalises:
+
+1. Design a new instance of the pottery shop environments where the robot and
+   items spawn in new positions. The world size should be the same as before,
+   as the network architecture assumes this shape.
+2. Without training in this new environment, generate and plot some rollouts
+   from your previously-trained agent `net2` in this new environment.
+3. Inspect the behaviour of the agent and qualitatively describe it.
+
+```python
+```
+
+Task 8 solution
+---------------
+
+Many altered environment layouts are permissible, here is one in which the
+shards and urns have been interchanged.
+
+```python
+env2 = Environment(
+    init_robot_pos=jnp.array((3,4), dtype=jnp.uint8),
+    init_items_map=jnp.array((
+      (0,0,0,0,1,1),
+      (0,2,0,0,0,1),
+      (0,0,0,0,0,0),
+      (0,2,2,0,0,1),
+      (0,0,0,0,1,1),
+      (1,0,2,0,1,1),
+    ), dtype=jnp.uint8),
+    bin_pos=jnp.array((0,0), dtype=jnp.uint8),
+)
+```
+
+We can inspect the behaviour of `net2` on this environment as follows.
+```python
+key_rollout = jax.random.key(seed=1)
+rollout = collect_rollout(
+    env=env2,
+    key=key_rollout,
+    policy_fn=net2.policy,
+    num_steps=64,
+)
+display_rollout(rollout)
+```
 
 Procedurally generated environments
 -----------------------------------
 
-TODO: Describe the ideas in the Cobbe paper about generalisation.
+In most cases, training a policy in a fixed environment will cause the agent to
+learn a brittle policy that relies on many assumptions about the environment
+that happen to hold in the fixed environment.
 
-TODO: Describe the following code
+A common approach to learning more robust policies is to train the agent in a
+broad distribution of *procedurally generated* environments, all of which share
+some commonality (e.g. same world size) but do not allow the agent to rely on
+spurious assumptions (e.g. robot and item positions).
+
+The first step to such a training approach is to write some code to randomly
+generate variations of the environment. Take a look at the following example.
 
 ```python
 def generate(
     key: PRNGKeyArray,
     world_size: int,
-    num_trash: int,
-    num_vases: int,
+    num_shards: int,
+    num_urns: int,
 ) -> Environment:
-    # fixed bin pos
+    # place the bin in the top left corner of the world
     bin_pos = jnp.zeros((2,), dtype=jnp.uint8)
 
     # list of possible item/robot coordinates
@@ -1012,7 +1276,7 @@ def generate(
     coords = coords[:, 1:]
 
     # sample robot and item positions without replacement
-    num_positions = 1 + num_trash + num_vases
+    num_positions = 1 + num_shards + num_urns
     all_positions = jax.random.choice(
         key=key,
         a=coords,
@@ -1026,12 +1290,12 @@ def generate(
     # create item map
     items_map = jnp.zeros((world_size, world_size), dtype=jnp.uint8)
     items_map = items_map.at[
-        items_pos[0, :num_trash],
-        items_pos[1, :num_trash],
+        items_pos[0, :num_shards],
+        items_pos[1, :num_shards],
     ].set(Item.SHARDS)
     items_map = items_map.at[
-        items_pos[0, num_trash:],
-        items_pos[1, num_trash:],
+        items_pos[0, num_shards:],
+        items_pos[1, num_shards:],
     ].set(Item.URN)
     
     return Environment(
@@ -1041,30 +1305,151 @@ def generate(
     )
 ```
 
-TODO: Some code to make a sample of levels and visualise it.
+We can use this code to generate a sample of environments as follows.
+
+```python
+key_generate = jax.random.key(seed=1)
+num_envs = 32
+envs = jax.vmap(
+    generate,
+    in_axes=(0, None, None, None),
+)(
+    jax.random.split(key, num_envs),
+    6,
+    3,
+    4,
+)
+display_envs(envs, grid_width=8)
+```
+
+> ### `jax.vmap`
+>
+> This is our first use of automatic vectorisation with JAX. It's not necessary
+> to understand the details right now, but suffice it to say that this call to
+> `jax.vmap(generate, in_axes=(0, None, None, None))` transforms `generate`
+> from a function that takes a single key and returns a single environment to a function that takes an array of keys and returns an array of environments.
+> If you are interested to learn more, take a look at the JAX tutorial on this
+> topic:
+> 
+> * [Automatic vectorization](https://docs.jax.dev/en/latest/automatic-vectorization.html).
 
 Training on a distribution of environments
 ------------------------------------------
 
-TODO: Describe the domain randomisation algorithm (note that it can be viewed
-as a special case too)
+Once we have a distribution of environments, we can integrate it into a
+reinforcement learning algorithm by, for example, sampling a new environment
+every time we want to reset the environment to collect a new rollout. Here is a
+modified version of `train_agent` that takes a procedural environment generator
+rather than a single environment.
 
 ```python
-code to train the new policy
+def train_agent_multienv(
+    key: PRNGKeyArray,
+    gen: Callable[[PRNGKeyArray], Environment],
+    net: ActorCriticNetwork,
+    reward_fn: RewardFunction,
+    num_train_steps: int = 512,
+    num_train_steps_per_vis: int = 8,
+) -> ActorCriticNetwork:
+    learning_rate = 0.001
+    max_grad_norm = 0.5
+    optimiser = optax.chain(
+        optax.clip_by_global_norm(max_grad_norm),
+        optax.adam(learning_rate=learning_rate),
+    )
+    optimiser_state = optimiser.init(net)
+
+    num_rollouts = 32
+    liveplot = LiveSubplots(['return'], num_train_steps)
+    for t in tqdm.notebook.trange(num_train_steps):
+        key_envs, key = jax.random.split(key)
+        envs = jax.vmap(gen)(jax.random.split(key_envs, num_rollouts))
+        key_step, key = jax.random.split(key)
+        net, optimiser_state, metrics = ppo_train_step_multienv(
+            key=key_step,
+            net=net,
+            envs=envs,
+            reward_fn=reward_fn,
+            optimiser=optimiser,
+            optimiser_state=optimiser_state,
+            # ppo step hyperparameters
+            num_rollouts=num_rollouts,
+            num_env_steps=64,
+            discount_rate=DISCOUNT_RATE,
+            eligibility_rate=0.95,
+            proximity_eps=0.1,
+            critic_coeff=0.5,
+            entropy_coeff=0.001,
+        )
+        liveplot.log(t, {'return': metrics['return']})
+        if (t+1) % num_train_steps_per_vis == 0:
+            liveplot.refresh()
+    
+    return net
+```
+
+Learning to solve a distribution of environments is more challenging than
+learning an individual environment, so we'll need a slightly larger policy
+and a longer training time.
+
+[Accordingly, this is a good time to switch over to a GPU or TPU runtime, if
+you haven't yet.]
+
+```python
+world_size = 4
+
+key = jax.random.key(seed=1)
+
+key_init, key = jax.random.split(key)
+net_big = ActorCriticNetwork.init(
+    key=key_init,
+    obs_height=world_size,
+    obs_width=world_size,
+    obs_features=2,
+    net_channels=16,
+    net_width=128,
+    num_conv_layers=4,
+    num_dense_layers=2,
+    num_actions=len(Action),
+)
+
+key_train, key = jax.random.split(key)
+net3 = train_agent_multienv(
+    key=key_train,
+    net=net_big,
+    gen=functools.partial(
+        generate,
+        world_size=world_size,
+        num_shards=2,
+        num_urns=2,
+    ),
+    reward_fn=reward2,
+    num_train_steps=10240,
+    num_train_steps_per_vis=128,
+)
 ```
 
 Task 9: How does the policy generalise now?
 -------------------------------------------
 
-Your task:
+Once `net3` finishes training, your task is to explore its generalisation
+properties:
 
-1. Test the policy on different shop layouts using this function. Can it handle
-   them?
-2. In each case, predict what you think will be the behaviour, and then
-   evaluate it and see the behaviour matches your prediction.
-3. Can you qualitatively characterise the kinds of environments that the policy
-   can handle and the kinds that it does not? What about the ways in which it
-   fails?
+1. Design some different shop layouts to probe the agent's generalisation
+   properties.
+
+2. For each shop layout you design, predict how you think the agent will behave.
+
+3. Then manually inspect the agent's behaviour using `collect_rollout` and
+   `display_rollout`.
+
+4. Qualitatively characterise the kinds of environments where the agent
+   generalises correctly and the ones where it does not.
+
+Task 9 solution
+---------------
+
+See below...
 
 Part 5: Goal misgeneralisation
 ==============================
@@ -1074,11 +1459,10 @@ Part 5: Goal misgeneralisation
 Note: Finish task 9 before reading further.
 \end{center}
 
-If all has gone to plan, you should have found an example of goal
-misgeneralisation. There may be multiple different examples of goal
-misgeneralisation, but let's move forward with the following one. When the
+If all has gone to plan, you should have found at least one example of goal
+misgeneralisation. Let's move forward with the following example. When the
 policy is tested on environment layouts where the bin is outside of the corner,
-we see the following:
+we expect to see the following:
 
 1. the policy generalises in terms of its ability to pick up shards, carry them
    to a destination, and drop them there; but
@@ -1099,7 +1483,7 @@ Recall the informal definition of goal misgeneralisation from Langosco et al.
 > (and therefore the distribution of observations) changes at test time. Goal
 > misgeneralization occurs if the agent now achieves low reward in the new
 > environment because it continues to act capably yet appears to optimize a
-> different reward $R' \neq R$. We call $R$ the intended objective and $R$′ the
+> different reward $R' \neq R$. We call $R$ the intended objective and $R'$ the
 > behavioral objective of the agent.
 
 Your next task is to line up the elements of this definition with our case of
@@ -1156,27 +1540,39 @@ The behavioural objective is to drop shards in the top left corner.
 
 ```
 def proxy(state: State, action: Action, next_state: State) -> float:
-   # ...
-   return 0.
+    item_below_robot = state.items_map[
+        state.robot_pos[0],
+        state.robot_pos[1],
+    ]
+    return (
+        (state.robot_pos[0] == 0)
+        & (state.robot_pos[1] == 0)
+        & (item_below_robot == Item.EMPTY)
+        & (state.inventory == Item.SHARDS)
+        & (action == Action.PUTDOWN)
+    ).astype(float)
 ```
 
-The evaluation code can be adapted from task 4:
+The evaluation code can be adapted from 'quantifying reward hacking' after task
+4.
 
 ```python
-rewards = [reward2, proxy]
-return_vecs = evaluate_behaviour(
-    key=jax.random.key(seed=seed),
-    env=env_shift,
-    net=net,
-    rewards=rewards,
-)
-```
+reward_fns = [reward2, proxy]
+return_vecs = [
+    evaluate_behaviour(
+        key=jax.random.key(seed=1),
+        env=env_shift,
+        net=net3,
+        reward_fn=r,
+    )
+    for r in reward_fns
+]
 
-```python
-fig, axes = plt.subplots(n, figsize=(5,3*len(return_vecs)))
-for (reward, returns, ax) in zip(rewards, return_vecs, axes):
+fig, axes = plt.subplots(len(reward_fns), figsize=(5,3*len(reward_fns)))
+for (reward_fn, returns, ax) in zip(reward_fns, return_vecs, axes):
     ax.hist(returns)
-    ax.set_title(reward.__name__)
+    ax.set_title(reward_fn.__name__)
+    ax.set_xlabel("return")
 fig.show()
 ```
 
@@ -1198,8 +1594,8 @@ also the bin location.
 def generate_shift(
     key: PRNGKeyArray,
     world_size: int,
-    num_trash: int,
-    num_vases: int,
+    num_shards: int,
+    num_urns: int,
 ) -> Environment:
     # ...
     return Environment(
@@ -1209,20 +1605,34 @@ def generate_shift(
     )
 ```
 
-TODO: Repeat code to sample levels and visualise the sample, for testing.
+You can use this code to test your generator:
+```python
+key_generate = jax.random.key(seed=1)
+num_envs = 32
+envs = jax.vmap(
+    generate_shift,
+    in_axes=(0, None, None, None),
+)(
+    jax.random.split(key, num_envs),
+    6,
+    3,
+    4,
+)
+display_envs(envs, grid_width=8)
+```
 
 Task 11 solution
 ----------------
 
-An easy way to do this is to incorportate the bin placement into the same
+An easy way to do this is to incorporate the bin placement into the same
 `jax.random.choice` call as the robot and the other items.
 
 ```python
 def generate_shift(
     key: PRNGKeyArray,
     world_size: int,
-    num_trash: int,
-    num_vases: int,
+    num_shards: int,
+    num_urns: int,
 ) -> Environment:
     # list of possible item/robot coordinates
     coords = einops.rearrange(
@@ -1231,7 +1641,7 @@ def generate_shift(
     )
 
     # sample bin, robot and item positions without replacement
-    num_positions = 1 + 1 + num_trash + num_vases
+    num_positions = 1 + 1 + num_shards + num_urns
     all_positions = jax.random.choice(
         key=key,
         a=coords,
@@ -1246,12 +1656,12 @@ def generate_shift(
     # create item map
     items_map = jnp.zeros((world_size, world_size), dtype=jnp.uint8)
     items_map = items_map.at[
-        items_pos[0, :num_trash],
-        items_pos[1, :num_trash],
+        items_pos[0, :num_shards],
+        items_pos[1, :num_shards],
     ].set(Item.SHARDS)
     items_map = items_map.at[
-        items_pos[0, num_trash:],
-        items_pos[1, num_trash:],
+        items_pos[0, num_shards:],
+        items_pos[1, num_shards:],
     ].set(Item.URN)
     
     return Environment(
@@ -1270,13 +1680,61 @@ opposed to `generate`. If we train a new policy using this new environment
 generator, we should see goal misgeneralisation decrease:
 
 ```python
-TODO:
-* train a new policy
-* quantify adherence to proxy vs true reward in a test level
+world_size = 4
+
+key = jax.random.key(seed=1)
+
+key_init, key = jax.random.split(key)
+net_big = ActorCriticNetwork.init(
+    key=key_init,
+    obs_height=world_size,
+    obs_width=world_size,
+    obs_features=2,
+    net_channels=16,
+    net_width=128,
+    num_conv_layers=4,
+    num_dense_layers=2,
+    num_actions=len(Action),
+)
+
+key_train, key = jax.random.split(key)
+net4 = train_agent_multienv(
+    key=key_train,
+    net=net_big,
+    gen=functools.partial(
+        generate_shift,
+        world_size=world_size,
+        num_shards=2,
+        num_urns=2,
+    ),
+    reward_fn=reward2,
+    num_train_steps=10240,
+    num_train_steps_per_vis=128,
+)
 ```
 
-Task 12: How far out of distribution?
--------------------------------------
+```python
+reward_fns = [reward2, proxy]
+return_vecs = [
+    evaluate_behaviour(
+        key=jax.random.key(seed=1),
+        env=env_shift,
+        net=net4,
+        reward_fn=r,
+    )
+    for r in reward_fns
+]
+
+fig, axes = plt.subplots(len(reward_fns), figsize=(5,3*len(reward_fns)))
+for (reward_fn, returns, ax) in zip(reward_fns, return_vecs, axes):
+    ax.hist(returns)
+    ax.set_title(reward_fn.__name__)
+    ax.set_xlabel("return")
+fig.show()
+```
+
+How far out of distribution?
+----------------------------
 
 In fact, we might not need to train exclusively on samples from the broader
 distribution of environments. Training on a small proportion of them while
@@ -1292,40 +1750,67 @@ parameter `alpha` controls the proportion of environments that are chosen from
 def generate_mixture(
     key: PRNGKeyArray,
     world_size: int,
-    num_trash: int,
-    num_vases: int,
+    num_shards: int,
+    num_urns: int,
+    alpha: float,
 ) -> Environment:
   key1, key = jax.random.split(key)
-  env1 = generate(key1, world_size
-  key1, key = jax.random.split(key)
+  env1 = generate(key1, world_size, num_shards, num_urns)
+  key2, key = jax.random.split(key)
+  env2 = generate_shift(key2, world_size, num_shards, num_urns)
+  key_which, key = jax.random.split(key)
+  use2 = jax.random.bernoulli(key_which, p=alpha, shape=())
+  return jax.tree.map(
+      lambda e1, e2: jnp.where(use2, e2, e1),
+      env1,
+      env2,
+  )
 ```
 
 > ### Conditional computation in JAX
 > 
 > The above code uses `jnp.where` to select between two arrays based on a
-> Boolean value. Of course, it would be simpler if we could just write an `if`
-> statement, but then the computational graph would depend on the value of an
-> array, making it harder to vectorise and compile this function. The function
-> `jnp.where` is one of a few different functions that JAX provides that allows
-> for computing a conditional (alongside `jax.lax.cond` and `jax.lax.select`).
-> Roughly speaking, the compiled version evaluates both the array in the `True`
-> branch and the one in the `False` branch of the conditional, and then uses
-> the value inside the condition array to determine which value to keep. For
-> today, it's not necessary to understand this pattern further, but if you are
-> interested in learning more about JAX, you can read more about these
+> Boolean value. This is a common pattern in JAX code, where it would be
+> simpler if we could just write an `if` statement, but then the computational
+> graph would depend on the value in the array, complicating vectorisation and
+> compilation.
+> 
+> The function `jnp.where` is one of a few different functions that JAX
+> provides that allows for computing a conditional (alongside `jax.lax.cond`
+> and `jax.lax.select`). Roughly speaking, the compiled version evaluates both
+> the array in the `True` branch and the one in the `False` branch of the
+> conditional, and then uses the value inside the condition array to determine
+> which value to keep.
+> 
+> For today, it's not necessary to understand this pattern further, but if you
+> are interested in learning more about JAX, you can read more about these
 > operations in the JAX documentation.
 
-Your final task is to experiment with the above mixture generator. What is the
-smallest mixture weight you can find where the policy learns to generalise
-correctly in environments where the bin is away from the top corner of the
-grid?
+Task 12: Finding the critical point
+-----------------------------------
+
+Your final task is an open-ended experimental question that is similar to a
+question that might arise during research on goal misgeneralisation.
+
+Specifically, your task is to experiment with the above mixture generator to
+determine, what is the smallest mixture weight you can find where the policy
+learns to generalise correctly in environments where the bin is away from the
+top corner of the grid?
+
+Roughly speaking, you will need to do the following:
+
+1. For a range of different values of the mixture weight, train an agent on a
+   generator with that value of the mixture weight.
+2. For each agent, quantify the extent to which it generalises as intended or
+   not as intended on an OOD environment or multiple OOD environments.
+3. Inspect these results in some way, for example by looking at a list of
+   generalisation metrics for different mixture weights or plotting the metrics
+   as a function of the mixture weight.
+
+Good luck!
 
 ```python
-TODO:
-* train a new policy
-* quantify adherence to proxy vs true reward in a test level
 ```
-
 
 Mitigating goal misgeneralisation in practice
 ---------------------------------------------

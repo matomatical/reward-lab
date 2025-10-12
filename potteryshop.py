@@ -1,7 +1,6 @@
 import enum
 import functools
 
-import numpy as np
 import jax
 import jax.numpy as jnp
 import einops
@@ -11,7 +10,6 @@ from typing import Callable, Self
 from jaxtyping import UInt8, Bool, Float, Array, PRNGKeyArray
 
 import strux
-import sprites
 
 
 # # # 
@@ -26,9 +24,6 @@ class Item(enum.IntEnum):
 
 @strux.struct
 class State:
-    """
-    State of a grid world.
-    """
     robot_pos: UInt8[Array, "2"]
     bin_pos: UInt8[Array, "2"]
     items_map: UInt8[Array, "world_size world_size"] # Item[world_size,world_size]
@@ -49,13 +44,20 @@ class Action(enum.IntEnum):
     RIGHT = 4 # move right
     PICKUP = 5 # pick up item
     PUTDOWN = 6 # drop held item
+    
+
+type PolicyFunction = Callable[
+    [Observation],
+    Float[Array, "num_actions"]
+]
+type PolicyValueFunction = Callable[
+    [Observation],
+    tuple[Float[Array, "num_actions"], Float[Array, ""]]
+]
 
 
 @strux.struct
 class Environment:
-    """
-    A grid world with a particular layout.
-    """
     init_robot_pos: UInt8[Array, "2"]
     init_items_map: UInt8[Array, "world_size world_size"]
     bin_pos: UInt8[Array, "2"]
@@ -69,9 +71,6 @@ class Environment:
 
     @jax.jit
     def reset(self: Self) -> State:
-        """
-        Initial state for the given layout.
-        """
         return State(
             robot_pos=self.init_robot_pos,
             items_map=self.init_items_map,
@@ -191,9 +190,9 @@ class Environment:
             return jnp.where(b > 0, b, a)
         # choose avatar
         robot_sprite = jnp.stack((
-            sprites.ROBOT,
-            sprites.ROBOT_SHARDS,
-            sprites.ROBOT_URN,
+            Sprites.ROBOT,
+            Sprites.ROBOT_SHARDS,
+            Sprites.ROBOT_URN,
         ))[state.inventory]
         
         # select sprites for other tiles
@@ -201,13 +200,13 @@ class Environment:
             (self.world_size, self.world_size, 16, 8),
             dtype=jnp.uint8,
         )
-        tall_sprites = tall_sprites.at[0, :].set(sprites.FLOOR)
-        tall_sprites = tall_sprites.at[1:, :, 8:].set(sprites.FLOOR[8:])
+        tall_sprites = tall_sprites.at[0, :].set(Sprites.FLOOR)
+        tall_sprites = tall_sprites.at[1:, :, 8:].set(Sprites.FLOOR[8:])
         tall_sprites = jnp.where(
             (state.items_map == Item.SHARDS)[:,:,None,None],
             jnp.where(
-                sprites.SHARDS > 0,
-                sprites.SHARDS,
+                Sprites.SHARDS > 0,
+                Sprites.SHARDS,
                 tall_sprites,
             ),
             tall_sprites,
@@ -215,8 +214,8 @@ class Environment:
         tall_sprites = jnp.where(
             (state.items_map == Item.URN)[:,:,None,None],
             jnp.where(
-                sprites.URN > 0,
-                sprites.URN,
+                Sprites.URN > 0,
+                Sprites.URN,
                 tall_sprites,
             ),
             tall_sprites,
@@ -225,8 +224,8 @@ class Environment:
             state.bin_pos[0],
             state.bin_pos[1],
         ].set(jnp.where(
-            (sprites.BIN > 0),
-            sprites.BIN,
+            (Sprites.BIN > 0),
+            Sprites.BIN,
             tall_sprites[state.bin_pos[0], state.bin_pos[1]],
         ))
         tall_sprites = tall_sprites.at[
@@ -254,70 +253,63 @@ class Environment:
         image = einops.rearrange(tiles, 'H W h w -> (H h) (W w)')
 
         # apply color palette
-        image = jnp.array(sprites.PALETTE, dtype=jnp.uint8)[image]
+        image = jnp.array(PALETTE, dtype=jnp.uint8)[image]
         return image
 
 
-@functools.partial(
-    jax.jit,
-    static_argnames=("world_size", "num_trash", "num_vases"),
-)
-def generate(
-    key: PRNGKeyArray,
-    world_size: int,
-    num_trash: int,
-    num_vases: int,
-) -> Environment:
-    """
-    Randomly construct an environment layout.
-    """
-    # fixed goal pos
-    bin_pos = jnp.zeros((2,), dtype=jnp.uint8)
-
-    # list of possible item/robot coordinates
-    coords = einops.rearrange(
-        jnp.indices((world_size, world_size)),
-        'c h w -> c (h w)',
-    )
-    # exclude (0,0) (used for goal)
-    coords = coords[:, 1:]
-
-    # sample robot and item positions without replacement
-    num_positions = 1 + num_trash + num_vases
-    all_positions = jax.random.choice(
-        key=key,
-        a=coords,
-        shape=(num_positions,),
-        axis=1,
-        replace=False,
-    )
-    robot_pos = all_positions[:, 0]
-    items_pos = all_positions[:, 1:]
-
-    # create item map
-    items_map = jnp.zeros((world_size, world_size), dtype=jnp.uint8)
-    items_map = items_map.at[
-        items_pos[0, :num_trash],
-        items_pos[1, :num_trash],
-    ].set(Item.SHARDS)
-    items_map = items_map.at[
-        items_pos[0, num_trash:],
-        items_pos[1, num_trash:],
-    ].set(Item.URN)
-    
-    return Environment(
-        init_robot_pos=robot_pos,
-        init_items_map=items_map,
-        bin_pos=bin_pos,
-    )
-
-
 # # # 
-# Rollouts
+# Simple rollouts
 
 
 @strux.struct
 class Transition:
+    state: State
+    action: UInt8[Array, ""]
+    next_state: State
+
+
+@strux.struct
+class Rollout:
+    transitions: Transition["num_steps"]
+
+
+@functools.partial(jax.jit, static_argnames=("policy_fn", "num_steps"))
+def collect_rollout(
+    env: Environment,
+    key: PRNGKeyArray,
+    policy_fn: PolicyFunction,
+    num_steps: int,
+) -> Rollout:
+    initial_state = env.reset()
+    keys_per_step = jax.random.split(key, num_steps)
+    def step(state, key_step):
+        obs = env.observe(state)
+        action_logits = policy_fn(obs)
+        action = jax.random.categorical(
+            key=key_step,
+            logits=action_logits,
+        )
+        next_state = env.step(state, action)
+        transition = Transition(
+            state=state,
+            action=action,
+            next_state=next_state,
+        )
+        return next_state, transition
+    _final_state, transitions = jax.lax.scan(
+        step,
+        initial_state,
+        keys_per_step,
+    )
+    return Rollout(transitions=transitions)
+
+
+# # # 
+# Annotated rollouts (for RL algorithms)
+
+
+@strux.struct
+class AnnotatedTransition:
     state: State
     obs: Observation
     value_pred: Float[Array, ""]
@@ -327,33 +319,30 @@ class Transition:
 
 
 @strux.struct
-class Rollout:
-    transitions: Transition["num_steps"]
+class AnnotatedRollout:
+    transitions: AnnotatedTransition["num_steps"]
     final_obs: Observation
     final_value_pred: Float[Array, ""]
 
 
-@functools.partial(jax.jit, static_argnames=("actor_critic", "num_steps"))
-def collect_rollout(
+@functools.partial(jax.jit, static_argnames=("policy_value_fn", "num_steps"))
+def collect_annotated_rollout(
     env: Environment,
     key: PRNGKeyArray,
-    actor_critic: Callable[
-        [Observation],
-        tuple[Float[Array, "num_actions"], Float[Array, ""]]
-    ],
+    policy_value_fn: PolicyValueFunction,
     num_steps: int,
-) -> Rollout:
-    def step(carry, _):
-        key, state = carry
-        key_step, key = jax.random.split(key)
+) -> AnnotatedRollout:
+    initial_state = env.reset()
+    keys_per_step = jax.random.split(key, num_steps)
+    def step(state, key_step):
         obs = env.observe(state)
-        action_logits, value_pred = actor_critic(obs)
+        action_logits, value_pred = policy_value_fn(obs)
         action = jax.random.categorical(
             key=key_step,
             logits=action_logits,
         )
         next_state = env.step(state, action)
-        transition = Transition(
+        transition = AnnotatedTransition(
             state=state,
             obs=obs,
             value_pred=value_pred,
@@ -361,15 +350,15 @@ def collect_rollout(
             action_logits=action_logits,
             next_state=next_state,
         )
-        return (key, next_state), transition
-    (key, final_state), transitions = jax.lax.scan(
+        return next_state, transition
+    final_state, transitions = jax.lax.scan(
         step,
-        (key, env.reset()),
-        length=num_steps,
+        initial_state,
+        keys_per_step,
     )
     final_obs = env.observe(final_state)
-    _, final_value_pred = actor_critic(final_obs)
-    return Rollout(
+    _, final_value_pred = policy_value_fn(final_obs)
+    return AnnotatedRollout(
         transitions=transitions,
         final_obs=final_obs,
         final_value_pred=final_value_pred,
@@ -377,152 +366,32 @@ def collect_rollout(
 
 
 # # # 
-# Testing
+# Spritesheet
+
+_IMAGE = Image.open("sprites.png")
 
 
-@functools.partial(jax.jit, static_argnames=("grid_width",))
-def animate_rollouts(
-    env: Environment, # or environments...
-    rollouts: Rollout["n"],
-    grid_width: int,
-) -> UInt8[Array, "num_steps+1 H*h+H+1 W*w+W+1 rgb"]:
-    n = jax.tree.leaves(rollouts)[0].shape[0]
-    assert (n % grid_width) == 0
-
-    # full state sequence
-    all_states = jax.tree.map(
-        lambda xs, xs_: jnp.concatenate((xs, xs_[:, [-1]]), axis=1),
-        rollouts.transitions.state,
-        rollouts.transitions.next_state,
-    )
-    
-    # render images for all states
-    images = jax.vmap(jax.vmap(env.render))(all_states)
-
-    # rearrange into a (padded) grid of renders
-    images = jnp.pad(
-        images,
-        pad_width=(
-            (0, 0), # env
-            (0, 0), # steps
-            (0, 1), # height
-            (0, 1), # width
-            (0, 0), # channel
-        ),
-    )
-    grid = einops.rearrange(
-        images,
-        '(H W) t h w rgb -> t (H h) (W w) rgb',
-        W=grid_width,
-    )
-    grid = jnp.pad(
-        grid,
-        pad_width=(
-            (0, 4), # time
-            (1, 0), # height
-            (1, 0), # width
-            (0, 0), # channel
-        ),
-    )
-    return grid
+# palette
+_COLORS = {i: rgb for rgb, i in _IMAGE.palette.colors.items()}
+PALETTE = jnp.array([_COLORS[i] for i in range(len(_COLORS))])
 
 
-def rollouts(
-    world_size: int = 8,
-    num_trash: int = 8,
-    num_vases: int = 8,
-    episode_horizon: int = 256,
-    num_parallel_envs: int = 32,
-    animation_path: str = "animation.gif",
-    seed: int = 42,
-):
-    key = jax.random.key(seed=seed)
-    env = generate(
-        key,
-        world_size=world_size,
-        num_trash=num_trash,
-        num_vases=num_vases,
-    )
-    
-    print("generating environments...")
-    envs = jax.vmap(generate, in_axes=(0,None,None,None))(
-        jax.random.split(key, num_parallel_envs),
-        world_size,
-        num_trash,
-        num_vases,
-    )
-    def actor_critic(obs):
-        return jnp.zeros(len(Action)), 0.
-    print("collecting rollouts...")
-    rollouts = jax.jit(jax.vmap(
-        collect_rollout,
-        in_axes=(0,0,None,None),
-    ))(
-        envs,
-        jax.random.split(num_parallel_envs),
-        actor_critic,
-        episode_horizon,
-    )
-    print("rendering rollouts...")
-    frames = animate_rollouts(
-        env=env, # TODO: maybe envs?
-        rollouts=rollouts,
-        grid_width=8,
-    )
-    print("saving gif...")
-    frames = np.array(frames)
-    Image.fromarray(frames[0]).save(
-        animation_path,
-        save_all=True,
-        append_images=[Image.fromarray(f) for f in frames[1:]],
-        duration=5,
-        loop=0,
-    )
+# sprites
+_SPRITESHEET = einops.rearrange(
+    jnp.array(_IMAGE),
+    '(H h) (W w) -> H W h w',
+    h=16,
+    w=8,
+)
 
 
-def play(
-    world_size: int = 8,
-    num_trash: int = 8,
-    num_vases: int = 8,
-    seed: int = 42,
-):
-    import readchar
-    import matthewplotlib as mp
-
-    key = jax.random.key(seed=seed)
-    env = generate(
-        key,
-        world_size=world_size,
-        num_trash=num_trash,
-        num_vases=num_vases,
-    )
-    
-    print("your turn... wasd move / q pickup / e drop / r reset / z quit")
-    state = env.reset()
-    print(mp.image(env.render(state)))
-    while True:
-        key = readchar.readkey()
-        if key == 'z':
-            break
-        elif key == 'r':
-            state = env.reset()
-        else:
-            action = {
-                'w': Action.UP,
-                'a': Action.LEFT,
-                's': Action.DOWN,
-                'd': Action.RIGHT,
-                'q': Action.PICKUP,
-                'e': Action.PUTDOWN,
-            }[key]
-            state = env.step(state, action)
-        plot = mp.image(env.render(state))
-        print(f"{-plot}{plot}")
+class Sprites:
+    FLOOR = _SPRITESHEET[0,0]
+    BIN = _SPRITESHEET[0,1]
+    SHARDS = _SPRITESHEET[0,2]
+    URN = _SPRITESHEET[0,3]
+    ROBOT = _SPRITESHEET[0,4]
+    ROBOT_SHARDS = _SPRITESHEET[0,5]
+    ROBOT_URN = _SPRITESHEET[0,6]
 
 
-if __name__ == "__main__":
-    import tyro
-    tyro.extras.subcommand_cli_from_dict({
-        'rollouts': rollouts,
-        'play': play,
-    })

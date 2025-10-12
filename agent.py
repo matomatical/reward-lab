@@ -221,6 +221,22 @@ class ActorCriticNetwork:
         value_pred = self.critic_head.forward(x)[0]
         return action_logits, value_pred
 
+    def policy_value(
+        self: Self,
+        obs: Observation,
+    ) -> tuple[
+        Float[Array, "num_actions"],
+        Float[Array, ""],
+    ]:
+        return self.forward(obs.grid, obs.vec)
+    
+    def policy(
+        self: Self,
+        obs: Observation,
+    ) -> Float[Array, "num_actions"]:
+        pi, v = self.policy_value(obs)
+        return pi
+
 
 if __name__ == "__main__":
     key = jax.random.key(seed=42)
