@@ -54,7 +54,7 @@ def evaluate_behaviour(
         rollouts.transitions.action,
         rollouts.transitions.next_state,
     )
-    returns = compute_return(
+    returns = jax.vmap(compute_return, in_axes=(0, None))(
         rewards,
         discount_rate,
     )
