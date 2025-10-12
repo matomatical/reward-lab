@@ -100,7 +100,7 @@ def ppo_train_step(
 
 @functools.partial(
     jax.jit,
-    static_argnames=["reward_fn","optimiser","num_rollouts","num_env_steps"],
+    static_argnames=["reward_fn", "optimiser", "num_env_steps"],
 )
 def ppo_train_step_multienv(
     key: PRNGKeyArray,
