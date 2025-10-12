@@ -84,7 +84,7 @@ def ppo_train_step(
         critic_coeff=critic_coeff,
         entropy_coeff=entropy_coeff,
     )
-    updates, opimisert_state = optimiser.update(grads, opimisert_state, net)
+    updates, optimiser_state = optimiser.update(grads, optimiser_state, net)
     net = optax.apply_updates(net, updates)
     # metrics
     train_metrics = {
@@ -95,7 +95,7 @@ def ppo_train_step(
         ).mean(),
         **aux,
     }
-    return net, opimisert_state, train_metrics
+    return net, optimiser_state, train_metrics
 
 
 @functools.partial(
@@ -159,7 +159,7 @@ def ppo_train_step_multienv(
         critic_coeff=critic_coeff,
         entropy_coeff=entropy_coeff,
     )
-    updates, opimisert_state = optimiser.update(grads, opimisert_state, net)
+    updates, optimiser_state = optimiser.update(grads, optimiser_state, net)
     net = optax.apply_updates(net, updates)
     # metrics
     train_metrics = {
@@ -170,7 +170,7 @@ def ppo_train_step_multienv(
         ).mean(),
         **aux,
     }
-    return net, opimisert_state, train_metrics
+    return net, optimiser_state, train_metrics
 
 
 # # # 
