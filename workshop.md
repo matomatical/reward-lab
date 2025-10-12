@@ -1112,11 +1112,10 @@ def train_agent_multienv(
     )
     optimiser_state = optimiser.init(net)
 
-    num_rollouts = 32
     liveplot = LiveSubplots(['return'], num_train_steps)
     for t in tqdm.notebook.trange(num_train_steps):
         key_envs, key = jax.random.split(key)
-        envs = jax.vmap(gen)(jax.random.split(key_envs, num_rollouts))
+        envs = jax.vmap(gen)(jax.random.split(key_envs, 32))
         key_step, key = jax.random.split(key)
         net, optimiser_state, metrics = ppo_train_step_multienv(
             key=key_step,
@@ -1126,7 +1125,6 @@ def train_agent_multienv(
             optimiser=optimiser,
             optimiser_state=optimiser_state,
             # ppo step hyperparameters
-            num_rollouts=num_rollouts,
             num_env_steps=64,
             discount_rate=DISCOUNT_RATE,
             eligibility_rate=0.95,

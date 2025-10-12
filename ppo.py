@@ -109,7 +109,6 @@ def ppo_train_step_multienv(
     reward_fn: RewardFunction,
     optimiser: optax.GradientTransformation,
     optimiser_state: optax.OptState,
-    num_rollouts: int = 32,
     num_env_steps: int = 64,
     discount_rate: float = 0.995,
     eligibility_rate: float = 0.95,
@@ -122,6 +121,7 @@ def ppo_train_step_multienv(
     dict[str, float],
 ]:
     # collect experience with current policy...
+    num_rollouts = jax.tree.leaves(envs)[0].shape[0]
     key_rollouts, key = jax.random.split(key)
     rollouts = jax.vmap(
         collect_annotated_rollout,
