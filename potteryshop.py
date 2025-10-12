@@ -90,13 +90,13 @@ class Environment:
             ( 0, +1), # move right
             ( 0,  0), # (pick up item)
             ( 0,  0), # (drop held item)
-        ), dtype=jnp.uint8)
+        ), dtype=jnp.int8)
         try_robot_pos = state.robot_pos + deltas[action]
         new_robot_pos = jnp.clip(
             try_robot_pos,
             min=0,
             max=self.world_size-1,
-        )
+        ).astype(jnp.uint8)
         state = state.replace(
             robot_pos=new_robot_pos,
         )
