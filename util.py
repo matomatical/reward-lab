@@ -156,8 +156,8 @@ def render_environments(
     return grid
 
 
-def display_environments(
-    envs: Environment["n"],
+def display_envs(
+    envs: potteryshop.Environment["n"],
     grid_width: int,
     upscale: int = 3,
 ):

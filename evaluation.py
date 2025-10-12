@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jaxtyping import Float, Array, PRNGKeyArray
 
 from potteryshop import Environment, State, Action, collect_rollout
-from agents import ActorCriticNetwork
+from agent import ActorCriticNetwork
 
 
 type RewardFunction = Callable[[State, Action, State], float]
