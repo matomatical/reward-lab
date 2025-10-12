@@ -33,7 +33,7 @@ def ppo_train_step(
     env: Environment,
     reward_fn: RewardFunction,
     optimiser: optax.GradientTransformation,
-    opt_state: optax.OptState,
+    optimiser_state: optax.OptState,
     num_rollouts: int = 32,
     num_env_steps: int = 64,
     discount_rate: float = 0.995,
@@ -84,7 +84,7 @@ def ppo_train_step(
         critic_coeff=critic_coeff,
         entropy_coeff=entropy_coeff,
     )
-    updates, opt_state = optimiser.update(grads, opt_state, net)
+    updates, opimisert_state = optimiser.update(grads, opimisert_state, net)
     net = optax.apply_updates(net, updates)
     # metrics
     train_metrics = {
@@ -95,7 +95,82 @@ def ppo_train_step(
         ).mean(),
         **aux,
     }
-    return net, opt_state, train_metrics
+    return net, opimisert_state, train_metrics
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=["reward_fn","optimiser","num_rollouts","num_env_steps"],
+)
+def ppo_train_step_multienv(
+    key: PRNGKeyArray,
+    net: ActorCriticNetwork,
+    envs: Environment["num_rollouts"],
+    reward_fn: RewardFunction,
+    optimiser: optax.GradientTransformation,
+    optimiser_state: optax.OptState,
+    num_rollouts: int = 32,
+    num_env_steps: int = 64,
+    discount_rate: float = 0.995,
+    eligibility_rate: float = 0.95,
+    proximity_eps: float = 0.1,
+    critic_coeff: float = 0.5,
+    entropy_coeff: float = 0.001,
+) -> tuple[
+    ActorCriticNetwork,
+    optax.OptState,
+    dict[str, float],
+]:
+    # collect experience with current policy...
+    key_rollouts, key = jax.random.split(key)
+    rollouts = jax.vmap(
+        collect_annotated_rollout,
+        in_axes=(0, 0, None, None),
+    )(
+        envs,
+        jax.random.split(key_rollouts, num_rollouts),
+        net.policy_value,
+        num_env_steps,
+    )
+    # compute rewards
+    rewards = jax.vmap(jax.vmap(reward_fn))(
+        rollouts.transitions.state,
+        rollouts.transitions.action,
+        rollouts.transitions.next_state,
+    )
+    # estimate advantages on the collected experience...
+    advantages = jax.vmap(
+        generalised_advantage_estimation,
+        in_axes=(0, 0, 0, None, None),
+    )(
+        rewards,
+        rollouts.transitions.value_pred,
+        rollouts.final_value_pred,
+        eligibility_rate,
+        discount_rate,
+    )
+    # update the policy on the collected experience...
+    (loss, aux), grads = jax.value_and_grad(ppo_loss_fn, has_aux=True)(
+        net,
+        transitions=rollouts.transitions,
+        advantages=advantages,
+        discount_rate=discount_rate,
+        proximity_eps=proximity_eps,
+        critic_coeff=critic_coeff,
+        entropy_coeff=entropy_coeff,
+    )
+    updates, opimisert_state = optimiser.update(grads, opimisert_state, net)
+    net = optax.apply_updates(net, updates)
+    # metrics
+    train_metrics = {
+        'loss': loss,
+        'return': jax.vmap(compute_return, in_axes=(0, None))(
+            rewards,
+            discount_rate,
+        ).mean(),
+        **aux,
+    }
+    return net, opimisert_state, train_metrics
 
 
 # # # 
