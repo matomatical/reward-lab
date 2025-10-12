@@ -112,7 +112,6 @@ class ActorCriticNetwork:
         static_argnames=(
             "obs_height",
             "obs_width",
-            "obs_channels",
             "net_channels",
             "net_width",
             "num_conv_layers",
